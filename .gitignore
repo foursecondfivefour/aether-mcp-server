@@ -1,14 +1,36 @@
-# .gitignore
-
+# Rust build artifacts
 /target
 /target2
 /target_build
+
+# Cargo package cache (local)
 .cargo_home
+
+# Cursor IDE agent artifacts
 agent-tools
 agent-transcripts
 terminals
 uploads
+
+# Debug symbols (Windows + macOS)
 *.pdb
 *.dSYM
+
+# Secrets — NEVER commit
 .env
+
+# Log files
 check_*.txt
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+_deps_cache
