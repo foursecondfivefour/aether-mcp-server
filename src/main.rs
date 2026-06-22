@@ -3,14 +3,8 @@
 //! Full-spectrum Windows 10/11 management via 10 MCP tools over stdio.
 //! Maximum speed (opt-level=3, LTO, native CPU), maximum security (CFG, ASLR, DEP).
 
-mod audit;
-mod config;
-mod error;
-mod server;
-mod tools;
-
-use crate::config::FeatureGates;
-use crate::server::AetherServer;
+use aether_mcp_server::config::FeatureGates;
+use aether_mcp_server::server::AetherServer;
 use rmcp::ServiceExt;
 use tracing_subscriber::EnvFilter;
 
