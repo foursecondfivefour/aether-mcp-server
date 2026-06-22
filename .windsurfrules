@@ -1,0 +1,86 @@
+# Windsurf Rules — AETHER_01
+
+## Project Identity
+
+AETHER_01 — Windows MCP server, 10 tools, 99% system management.
+- **Language:** Rust (edition 2021, stable 1.85+)
+- **Target:** Windows 10/11 x86-64 MSVC only
+- **Transport:** stdio — stdout is JSON-RPC exclusively
+
+## Build
+
+```powershell
+$env:CARGO_HOME = ".\.cargo_home"
+cargo check
+cargo build
+```
+
+## Architecture
+
+```
+src/
+├── main.rs      — tokio::main, dotenvy, tracing→stderr, serve((stdin,stdout))
+├── server.rs    — AetherServer, tool_router, tool_handler, ActionParams
+├── config.rs    — FeatureGates from .env
+├── error.rs     — AetherError + FormatMessageW (Russian messages)
+├── audit.rs     — log_success, log_failure, log_forced, log_security
+└── tools/
+    ├── process.rs     — 1. process_control
+    ├── filesystem.rs  — 2. file_system
+    ├── registry.rs    — 3. registry_editor
+    ├── service.rs     — 4. service_manager
+    ├── gui.rs         — 5. gui_automation
+    ├── sysinfo.rs     — 6. system_info
+    ├── network.rs     — 7. network_manager
+    ├── user.rs        — 8. user_management
+    ├── security.rs    — 9. security_audit
+    └── automation.rs  — 10. system_automation
+```
+
+## Key Rules
+
+### NEVER
+- Print to stdout (MCP JSON-RPC channel)
+- Use `cmd.exe` or `powershell.exe` for system operations
+- Import `windows::core::*` (shadows `std::result::Result`)
+- Modify `mcp.json` or `.env` without explicit user request
+- Skip `// SAFETY:` comments on unsafe blocks
+
+### ALWAYS
+- Validate all tool parameters before Win32 API calls
+- Check `force: true` for dangerous operations
+- `.map_err(|e| AetherError::win32(e))?` on every Windows API call
+- Canonicalize file paths before filesystem operations
+- Audit-log every tool invocation
+- Use `std::result::Result<T, AetherError>` (not bare `Result`)
+
+## Adding Actions
+
+```rust
+// In tools/<tool>.rs, inside handle_* function:
+"new_action" => {
+    let p = params.get("required_param")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AetherError::invalid_param("required_param missing"))?;
+
+    check_force(&params)?; // if dangerous
+
+    let result = unsafe { Win32Call(p) }
+        .map_err(|e| AetherError::win32(e))?;
+
+    audit::log_success("tool", "new_action", &format!("param={p}"));
+    Ok(serde_json::json!({"ok":true}).to_string())
+}
+```
+
+## Feature Gates
+
+```rust
+server.gates.check(server.gates.dll_inject, "AETHER_DLL_INJECT")?;
+```
+Six gates, all off by default: `BCD_EDIT`, `HAL_CONFIG`, `OFFLINE_REGISTRY`, `DLL_INJECT`, `TOKEN_MANIPULATION`, `LSA_SECRETS`.
+
+## What's Missing (by design)
+
+- Formatting volumes / repartitioning (irreversible data loss risk)
+- Kernel Debugger config (extreme niche, dangerous)

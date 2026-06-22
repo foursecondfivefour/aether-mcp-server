@@ -1,0 +1,96 @@
+---
+description: AETHER_01 — Windows MCP Server development rules for Cursor
+globs: "**/*.rs,**/*.toml,AGENTS.md,SECURITY.md,README.md"
+version: 1.0.0
+alwaysApply: false
+---
+
+# AETHER_01 — Cursor Rules
+
+## Project Identity
+
+- **Name**: AETHER_01
+- **Type**: MCP server over stdio, 10 tools, 99% Windows management
+- **Language**: Rust (edition 2021, stable 1.85+)
+- **Target**: Windows 10/11 x86-64 MSVC only
+- **Transport**: stdio — stdout is JSON-RPC ONLY, never print to stdout
+- **Sensitive files**: NEVER modify `mcp.json` or `.env` without explicit user request
+
+## Stack
+
+| Dependency | Version | Purpose |
+|-----------|---------|---------|
+| `rmcp` | 0.5 | Official MCP Rust SDK |
+| `windows` | 0.58 | Win32 API bindings (50+ features) |
+| `windows-registry` | 0.3 | High-level registry access |
+| `tokio` | 1 | Async runtime |
+| `serde` / `serde_json` | 1 | JSON serialization |
+| `schemars` | 0.8 | JSON Schema for MCP tool params |
+| `tracing` | 0.1 | Structured logging (stderr only, ansi=false) |
+| `dotenvy` | 0.15 | .env loading |
+
+## Build
+
+```powershell
+$env:CARGO_HOME = ".\.cargo_home"
+cargo check    # fast verify
+cargo build    # binary in target/debug/
+```
+
+**Release build** is hardened: `lto=fat, codegen-units=1, panic=abort, strip=symbols, target-cpu=native, control-flow-guard=yes, /DYNAMICBASE, /NXCOMPAT, /HIGHENTROPYVA, +crt-static`.
+
+## Architecture
+
+```
+main.rs → dotenvy::dotenv() → FeatureGates → AetherServer → serve((stdin,stdout))
+
+server.rs: AetherServer { gates, tool_router }
+  #[tool_router(router = tool_router)] → 10 tools
+  #[tool_handler(router = self.tool_router)] → ServerHandler
+
+tools/*.rs → pub fn handle_*(action, params) → match action { ... }
+error.rs  → AetherError enum + FormatMessageW FFI (Russian messages)
+audit.rs  → log_success / log_failure / log_forced / log_security
+```
+
+## Essential Patterns
+
+### Adding a new action to an existing tool
+
+1. Add a new match arm in `tools/<tool>.rs` in the `handle_*` function
+2. Validate params: `params.get("key").and_then(|v| v.as_str())`
+3. For dangerous ops: `check_force(&params)?`
+4. Log via `audit::log_success("tool_name", "action_name", "detail")`
+5. Return `serde_json::json!({...}).to_string()`
+
+### Feature gates
+
+```rust
+server.gates.check(server.gates.dll_inject, "AETHER_DLL_INJECT")?;
+```
+All dangerous gates default to `0` in `.env.example`. Gate names: `AETHER_BCD_EDIT`, `AETHER_HAL_CONFIG`, `AETHER_OFFLINE_REGISTRY`, `AETHER_DLL_INJECT`, `AETHER_TOKEN_MANIPULATION`, `AETHER_LSA_SECRETS`.
+
+### Error handling
+
+- Use `AetherError::invalid_param()`, `.permission_denied()`, `.not_found()`, `.win32()`
+- All errors are Russian with Win32 code translation via FormatMessageW
+- Windows API calls: `.map_err(|e| AetherError::win32(e))?`
+
+### Conventions
+
+- `snake_case` for Rust, `camelCase` for JSON keys
+- `#![allow(unsafe_code)]` per module, `// SAFETY:` on every unsafe block
+- Documentation on every public item
+- `cargo fmt` before commit, `cargo clippy -- -D clippy::all -D clippy::pedantic`
+- Never use `cmd.exe`/`powershell.exe` for system ops — use Win32 API directly
+- Always canonicalize file paths before operations
+
+## Testing
+
+```powershell
+cargo check                                     # fast compile check
+cargo run                                       # manual test via MCP client
+cargo clippy -- -D clippy::all -D clippy::pedantic
+```
+
+AETHER_01 echo tests: `process_control.list`, `service_manager.list`, `system_info.cpu_info`, `gui_automation.mouse_position`, `network_manager.adapters`.
