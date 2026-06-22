@@ -1,0 +1,10 @@
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "control-flow-guard=yes",
+    "-C", "link-arg=/GUARD:CF",
+    "-C", "link-arg=/DYNAMICBASE",
+    "-C", "link-arg=/NXCOMPAT",
+    "-C", "link-arg=/HIGHENTROPYVA",
+    "-C", "target-feature=+crt-static",
+]

@@ -1,0 +1,14 @@
+# .gitignore
+
+/target
+/target2
+/target_build
+.cargo_home
+agent-tools
+agent-transcripts
+terminals
+uploads
+*.pdb
+*.dSYM
+.env
+check_*.txt
