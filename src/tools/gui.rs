@@ -463,7 +463,7 @@ fn find_window(ctx: &ErrorContext, params: &Value) -> std::result::Result<String
     };
 
     unsafe {
-        EnumWindows(
+        let _ = EnumWindows(
             Some(enum_find_window_callback),
             LPARAM(std::ptr::addr_of_mut!(state) as isize),
         );
@@ -524,7 +524,7 @@ fn list_windows(ctx: &ErrorContext) -> std::result::Result<String, AetherError> 
     let mut entries: Vec<WindowEntry> = Vec::new();
 
     unsafe {
-        EnumWindows(
+        let _ = EnumWindows(
             Some(enum_list_windows_callback),
             LPARAM(std::ptr::addr_of_mut!(entries) as isize),
         );
@@ -839,15 +839,15 @@ fn capture_to_bmp(ctx: &ErrorContext, dc: HDC, x: i32, y: i32, w: i32, h: i32) -
 
     let bitmap = unsafe { CreateCompatibleBitmap(dc, w, h) };
     if bitmap.0 == std::ptr::null_mut() {
-        unsafe { DeleteDC(mem_dc) };
+        unsafe { let _ = DeleteDC(mem_dc); };
         return Err(AetherError::win32(ctx.clone(), "CreateCompatibleBitmap", "failed"));
     }
 
     let old_bitmap = unsafe { SelectObject(mem_dc, bitmap) };
     if old_bitmap.0 == std::ptr::null_mut() {
         unsafe {
-            DeleteObject(bitmap);
-            DeleteDC(mem_dc);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
         }
         return Err(AetherError::win32(ctx.clone(), "SelectObject", "failed"));
     }
@@ -856,8 +856,8 @@ fn capture_to_bmp(ctx: &ErrorContext, dc: HDC, x: i32, y: i32, w: i32, h: i32) -
     if result.is_err() {
         unsafe {
             SelectObject(mem_dc, old_bitmap);
-            DeleteObject(bitmap);
-            DeleteDC(mem_dc);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
         }
         return Err(AetherError::win32(ctx.clone(), "BitBlt", "failed"));
     }
@@ -890,8 +890,8 @@ fn capture_to_bmp(ctx: &ErrorContext, dc: HDC, x: i32, y: i32, w: i32, h: i32) -
     // Cleanup GDI objects
     unsafe {
         SelectObject(mem_dc, old_bitmap);
-        DeleteObject(bitmap);
-        DeleteDC(mem_dc);
+        let _ = DeleteObject(bitmap);
+        let _ = DeleteDC(mem_dc);
     }
 
     if rows_copied == 0 || rows_copied == i32::MAX {
@@ -957,7 +957,7 @@ fn clipboard_read(ctx: &ErrorContext) -> std::result::Result<String, AetherError
             String::from_utf16_lossy(slice)
         };
 
-        unsafe { GlobalUnlock(HGLOBAL(handle as *mut c_void)) };
+        unsafe { let _ = GlobalUnlock(HGLOBAL(handle as *mut c_void)); };
 
         Ok(text)
     })();
@@ -1005,7 +1005,7 @@ fn clipboard_write(ctx: &ErrorContext, params: &Value) -> std::result::Result<St
 
         let ptr = unsafe { GlobalLock(hglobal) };
         if ptr.is_null() {
-            unsafe { GlobalFree(hglobal) };
+            unsafe { let _ = GlobalFree(hglobal); };
             return Err(AetherError::win32(ctx.clone(), "GlobalLock", "clipboard write"));
         }
 
@@ -1013,16 +1013,16 @@ fn clipboard_write(ctx: &ErrorContext, params: &Value) -> std::result::Result<St
             std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
         }
 
-        unsafe { GlobalUnlock(hglobal) };
+        unsafe { let _ = GlobalUnlock(hglobal); };
 
         if unsafe { EmptyClipboard() } == 0 {
-            unsafe { GlobalFree(hglobal) };
+            unsafe { let _ = GlobalFree(hglobal); };
             return Err(AetherError::win32(ctx.clone(), "EmptyClipboard", "failed"));
         }
 
         let set_handle = unsafe { SetClipboardData(CF_UNICODETEXT, hglobal.0 as isize) };
         if set_handle == 0 {
-            unsafe { GlobalFree(hglobal) };
+            unsafe { let _ = GlobalFree(hglobal); };
             return Err(AetherError::win32(ctx.clone(), "SetClipboardData", "failed"));
         }
         // On success, clipboard owns the memory — do NOT free hglobal

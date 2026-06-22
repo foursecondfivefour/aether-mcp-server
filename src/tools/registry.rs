@@ -25,6 +25,7 @@ use windows::Win32::System::Registry::{
 
 // windows_registry 0.3 HKEY is *mut c_void but not publicly re-exported.
 // We define it here to match the internal HKEY type used by windows_registry::Key.
+#[allow(dead_code)]
 type HKEY = *mut std::ffi::c_void;
 
 use windows::Win32::Security::{

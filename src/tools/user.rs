@@ -25,9 +25,7 @@ use windows::Win32::Security::*;
 use windows::Win32::Security::Authorization::*;
 use windows::Win32::Security::Credentials::*;
 use windows::Win32::Security::Cryptography::*;
-use windows::Win32::Security::Authentication::*;
 use windows::Win32::System::RemoteDesktop::*;
-use windows::Win32::System::SystemServices::*;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcessToken,
 };
@@ -91,7 +89,7 @@ const FILTER_NORMAL_ACCOUNT: u32 = 0x0002;
 
 const POLICY_VIEW_LOCAL_INFORMATION: u32 = 0x00000001;
 
-const CERT_SYSTEM_STORE_CURRENT_USER: u32 = 0x00010000;
+const _CERT_SYSTEM_STORE_CURRENT_USER: u32 = 0x00010000;
 
 // ──────────────────────────────────────────────────────────────────────────
 // LSA types (manual definition for LsaOpenPolicy compatibility)
@@ -494,7 +492,7 @@ fn create_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
 
     let w_username = to_wide_null(&username);
     let w_password = to_wide_null(&password);
-    let w_full = to_wide_null(&full_name);
+    let _w_full = to_wide_null(&full_name);
     let w_comment = to_wide_null(&comment);
 
     let info = USER_INFO_1 {
@@ -1209,7 +1207,7 @@ fn logon_rights(_server: &AetherServer) -> std::result::Result<String, AetherErr
     ];
 
     unsafe {
-        let mut obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
+        let obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
         let mut policy_handle: isize = isize::default();
 
         let nt_status = LsaOpenPolicy(
@@ -1732,7 +1730,7 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
 
         let new_attr = if enable { SE_PRIVILEGE_ENABLED } else { TOKEN_PRIVILEGES_ATTRIBUTES(0) };
 
-        let mut tp = TOKEN_PRIVILEGES {
+        let tp = TOKEN_PRIVILEGES {
             PrivilegeCount: 1,
             Privileges: [LUID_AND_ATTRIBUTES {
                 Luid: luid,
@@ -1924,7 +1922,7 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
         _ => {
             // Fallback: try LSA enumerate
             unsafe {
-                let mut obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
+                let obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
                 let mut policy_handle: isize = isize::default();
 
                 let nt_status = LsaOpenPolicy(
@@ -2002,7 +2000,7 @@ fn lsa_secret_read(server: &AetherServer, params: &Value) -> std::result::Result
     }
 
     unsafe {
-        let mut obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
+        let obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
         let mut policy_handle: isize = isize::default();
 
         let nt_status = LsaOpenPolicy(

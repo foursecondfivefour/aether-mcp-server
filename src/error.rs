@@ -32,6 +32,7 @@ impl ErrorContext {
 
     /// Attach a target description and return the context.
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_target(mut self, target: String) -> Self {
         self.target = Some(target);
         self
@@ -295,6 +296,7 @@ impl AetherError {
 
     /// A parameter has an unacceptable value.
     #[must_use]
+    #[allow(dead_code)]
     pub fn invalid_value(ctx: ErrorContext, param_name: &str, reason: impl Into<String>) -> Self {
         let r = reason.into();
         Self::InvalidParameter(format_error(
@@ -409,6 +411,7 @@ impl AetherError {
 
     /// Create a JSON serialisation error.
     #[must_use]
+    #[allow(dead_code)]
     pub fn serde_error(msg: impl Into<String>) -> Self {
         Self::Serde(format!(
             "Ошибка обработки данных: {}\n\
@@ -421,6 +424,7 @@ impl AetherError {
 
     /// Create a WMI error.
     #[must_use]
+    #[allow(dead_code)]
     pub fn wmi_error(msg: impl Into<String>) -> Self {
         Self::WmiError(format!(
             "Ошибка WMI: {}\n\
@@ -435,6 +439,7 @@ impl AetherError {
 
     /// Create an internal server error.
     #[must_use]
+    #[allow(dead_code)]
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(format!(
             "Внутренняя ошибка сервера: {}\n\
@@ -449,6 +454,7 @@ impl AetherError {
 impl AetherError {
     /// Quick invalid param (no context). Prefer `invalid_param(ctx, msg)`.
     #[must_use]
+    #[allow(dead_code)]
     pub fn quick_invalid(msg: impl Into<String>) -> Self {
         Self::InvalidParameter(format!("Параметр не указан: {}", msg.into()))
     }

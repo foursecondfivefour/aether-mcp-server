@@ -19,14 +19,11 @@ use std::slice;
 
 use windows::core::{PCWSTR, PWSTR, w, s};
 use windows::Win32::Foundation::*;
-use windows::Win32::NetworkManagement::Dns::*;
 use windows::Win32::NetworkManagement::IpHelper::*;
 use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::Networking::WinSock::*;
 use windows::Win32::System::Diagnostics::ToolHelp::*;
 use windows::Win32::System::LibraryLoader::*;
-use windows::Win32::System::Memory::*;
-use windows::Win32::System::Threading::*;
 
 // ---------------------------------------------------------------------------
 // FFI: Bluetooth device discovery (bthprops.cpl)
@@ -131,7 +128,7 @@ struct RASCONNSTATUSW {
 }
 
 #[repr(C)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, non_snake_case)]
 struct DNS_CACHE_ENTRY {
     pNext: *mut DNS_CACHE_ENTRY,
     pszName: PCWSTR,
@@ -171,6 +168,7 @@ unsafe fn sockaddr_to_ip(addr_ptr: *const SOCKADDR) -> String {
 }
 
 /// Convert a `SOCKADDR` pointer to a port number (host byte order).
+#[allow(dead_code)]
 unsafe fn sockaddr_to_port(addr_ptr: *const SOCKADDR) -> u16 {
     if addr_ptr.is_null() {
         return 0;
@@ -1042,9 +1040,9 @@ fn action_vpn_connections() -> std::result::Result<String, AetherError> {
 
         let out: Vec<_> = conns[..count as usize].iter().map(|c| {
             let name = wstr_to_string(&c.sz_entry_name);
-            let mut st: RASCONNSTATUSW = unsafe { mem::zeroed() };
+            let mut st: RASCONNSTATUSW = mem::zeroed();
             st.dw_size = mem::size_of::<RASCONNSTATUSW>() as u32;
-            let state = if unsafe { RasGetConnectStatusW(c.h_ras_conn, &mut st) } == 0 {
+            let state = if RasGetConnectStatusW(c.h_ras_conn, &mut st) == 0 {
                 match st.ras_connstate {
                     0 => "idle", 1 => "connecting", 2 => "connected", 3 => "disconnected",
                     s if (0x2000..=0x200A).contains(&s) => "authenticating",
@@ -1118,7 +1116,7 @@ fn action_bluetooth_devices() -> std::result::Result<String, AetherError> {
             }
             devs.push(add_dev(&nd));
         }
-        BluetoothFindDeviceClose(h);
+        let _ = BluetoothFindDeviceClose(h);
         Ok(serde_json::to_string_pretty(&devs)?)
     }
 }

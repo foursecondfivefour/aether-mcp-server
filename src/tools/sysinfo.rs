@@ -387,13 +387,13 @@ unsafe fn action_disk_info(_ctx: &ErrorContext) -> std::result::Result<String, A
         let drive_type = GetDriveTypeW(PCWSTR::from_raw(root_wide.as_ptr()));
 
         let type_str = match drive_type {
-            DRIVE_UNKNOWN => "Unknown",
-            DRIVE_NO_ROOT_DIR => "No Root Dir",
-            DRIVE_REMOVABLE => "Removable",
-            DRIVE_FIXED => "Fixed",
-            DRIVE_REMOTE => "Remote",
-            DRIVE_CDROM => "CD-ROM",
-            DRIVE_RAMDISK => "RAM Disk",
+            0 => "Unknown",
+            1 => "No Root Dir",
+            2 => "Removable",
+            3 => "Fixed",
+            4 => "Remote",
+            5 => "CD-ROM",
+            6 => "RAM Disk",
             _ => "Unknown",
         };
 

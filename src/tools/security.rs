@@ -87,7 +87,8 @@ fn reg_set_dword(path: &str, name: &str, value: u32) -> std::result::Result<(), 
 }
 
 /// Escape a single-quoted PowerShell string argument.
-fn ps_escape(s: &str) -> String {
+    #[allow(dead_code)]
+    fn ps_escape(s: &str) -> String {
     s.replace('\'', "''")
 }
 
@@ -489,7 +490,7 @@ fn action_bitlocker_status() -> std::result::Result<String, AetherError> {
 
 /// Firewall profile status from registry.
 fn action_firewall_profile_status() -> std::result::Result<String, AetherError> {
-    let base = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy";
+    let _base = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy";
 
     let profiles = [
         ("Domain", r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile"),
@@ -670,7 +671,7 @@ fn action_exploit_protection() -> std::result::Result<String, AetherError> {
 fn action_sandbox_status() -> std::result::Result<String, AetherError> {
     let raw = ps_output("dism /online /get-featureinfo /featurename:Containers-DisposableClientVM")?;
     let installed = raw.contains("State : Enabled") || raw.contains("State: Enabled");
-    let enabled = raw.contains("Enabled");
+    let _enabled = raw.contains("Enabled");
 
     Ok(json!({
         "sandbox_installed": installed,
@@ -682,16 +683,16 @@ fn action_sandbox_status() -> std::result::Result<String, AetherError> {
 
 /// Hyper-V status from registry.
 fn action_hyperv_status() -> std::result::Result<String, AetherError> {
-    let virt_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization";
+    let _virt_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization";
 
-    let hypervisor_present = reg_dword(
+    let _hypervisor_present = reg_dword(
         r"HARDWARE\ACPI\FADT",
         "", // HypervisorPresentBit is in FADT, but registry approach is simpler
         0,
     );
 
     // Check virtualization-related registry keys
-    let hyperv_enabled = reg_dword(
+    let _hyperv_enabled = reg_dword(
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization",
         "IsVirtualMachine",
         0,

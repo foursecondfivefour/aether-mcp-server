@@ -58,7 +58,7 @@ struct SystemHandleTableEntryInfo {
     GrantedAccess: u32,
 }
 
-const SystemHandleInformation: u32 = 16;
+const SYSTEM_HANDLE_INFORMATION: u32 = 16;
 const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
 
 extern "system" {
@@ -833,7 +833,7 @@ async fn list_handles(params: Value) -> std::result::Result<String, AetherError>
         // STATUS_INFO_LENGTH_MISMATCH.
         let status = unsafe {
             NtQuerySystemInformation(
-                SystemHandleInformation,
+                SYSTEM_HANDLE_INFORMATION,
                 buf.as_mut_ptr().cast::<c_void>(),
                 buffer_size,
                 &mut return_length,
