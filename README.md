@@ -3,6 +3,22 @@
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <a href="cursor://anysphere.cursor-deeplink/mcp/install?name=aether-01&config=eyJhcmdzIjpbIi1FeGVjdXRpb25Qb2xpY3kiLCJCeXBhc3MiLCItTm9Qcm9maWxlIiwiLUNvbW1hbmQiLCJpcm0gaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2ZvdXJzZWNvbmRmaXZlZm91ci9hZXRoZXItbWNwLXNlcnZlci9tYWluL2luc3RhbGwucHMxIHwgaWV4Il0sImNvbW1hbmQiOiJwb3dlcnNoZWxsIn0=">
+    <img src="https://img.shields.io/badge/Add%20to-Cursor-3ecf8e?logo=cursor&logoColor=white&style=for-the-badge" alt="Add to Cursor" />
+  </a>
+  <a href="vscode://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D">
+    <img src="https://img.shields.io/badge/Add%20to-VSCode-007acc?logo=visualstudiocode&logoColor=white&style=for-the-badge" alt="Add to VS Code" />
+  </a>
+  <a href="vscode-insiders://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D">
+    <img src="https://img.shields.io/badge/Add%20to-VSCode%20Insiders-007acc?logo=visualstudio&logoColor=white&style=for-the-badge" alt="Add to VS Code Insiders" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1"><img src="https://img.shields.io/badge/PowerShell-Install%20Script-5391FE?logo=powershell&logoColor=white&style=for-the-badge" alt="Install via PowerShell" /></a>
+</p>
+
 **10 инструментов. 99% охвата Windows. 0 компромиссов в безопасности.**
 
 AETHER_01 — это [MCP (Model Context Protocol)](https://modelcontextprotocol.io) сервер на Rust, предоставляющий AI-ассистентам полный контроль над Windows 10/11 через стандартный ввод/вывод. От управления процессами до GUI-автоматизации, от реестра до WMI-запросов.
