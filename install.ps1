@@ -1,43 +1,33 @@
 # AETHER_01 — One-Click Installer
-# Maximum error handling. Every operation is wrapped. Every failure has a recovery path.
+# Supports 14+ MCP-compatible editors and IDEs with an interactive selection menu.
 #
 # Usage:
 #   Local:   pwsh -ExecutionPolicy Bypass -File install.ps1
 #   Remote:  pwsh -c "irm https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1 | iex"
+#   Silent:  pwsh -File install.ps1 -Targets cursor,claude -Silent
 
 [CmdletBinding()]
 param(
-    [ValidateSet("auto", "cursor", "claude", "windsurf", "vscode", "all")]
-    [string[]]$Targets = @("auto"),
-
+    [string[]]$Targets = @(""),
     [string]$BinaryPath = "",
-
     [string]$ReleaseTag = "v1.0.0",
-
     [switch]$Force,
-
     [switch]$NoAdminWarning,
-
+    [Switch]$Silent,
     [string]$DownloadDir = "$env:LOCALAPPDATA\AetherMCP",
-
     [int]$RetryCount = 3,
-
     [int]$RetryDelaySeconds = 5,
-
     [int]$DownloadTimeoutSeconds = 300
 )
 
 # ════════════════════════════════════════════════════════════════════════
-# Boot-level safety: never pollute the caller's session and exit scope cleanly
+# Boot-level safety
 # ════════════════════════════════════════════════════════════════════════
-
 $script:ErrorActionPreference = "Stop"
 $script:ProgressPreference   = "SilentlyContinue"
 $script:errors               = [System.Collections.Generic.List[string]]::new()
 $script:warnings             = [System.Collections.Generic.List[string]]::new()
-
-# Wrapper script so "iex" captures the correct exit code
-$script:exitCode = 0
+$script:exitCode             = 0
 
 function Register-Error   { param($msg) $script:errors.Add($msg)   ; $script:exitCode = [Math]::Max($script:exitCode, 1) }
 function Register-Warning { param($msg) $script:warnings.Add($msg) }
@@ -45,413 +35,125 @@ function Register-Warning { param($msg) $script:warnings.Add($msg) }
 # ════════════════════════════════════════════════════════════════════════
 # Constants
 # ════════════════════════════════════════════════════════════════════════
-
 $REPO_OWNER = "foursecondfivefour"
 $REPO_NAME  = "aether-mcp-server"
 $REPO_URL   = "https://github.com/$REPO_OWNER/$REPO_NAME"
 $RAW_URL    = "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main"
 $API_URL    = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/tags/$ReleaseTag"
-
 $EXE_NAME   = "aether-mcp-server.exe"
-$MIN_EXE_SIZE_BYTES = 10240  # 10 KB — anything smaller is definitely corrupt
+$MIN_EXE_SIZE_BYTES = 10240
 
 # ════════════════════════════════════════════════════════════════════════
-# Output helpers (safe across interactive/non-interactive/running)
+# Output helpers
 # ════════════════════════════════════════════════════════════════════════
-
 function Write-Step { param($msg) Write-Host "  [OK] $msg"       -ForegroundColor Green     }
 function Write-Warn { param($msg) Write-Host "  [!!] $msg"       -ForegroundColor Yellow     }
 function Write-Info { param($msg) Write-Host "  [..] $msg"       -ForegroundColor Cyan       }
 function Write-Err  { param($msg) Write-Host "  [XX] $msg"       -ForegroundColor Red        ; Register-Error $msg }
 function Write-Dbg  { param($msg) Write-Debug $msg }
 
-# ════════════════════════════════════════════════════════════════════════
-# Pre-flight checks
-# ════════════════════════════════════════════════════════════════════════
+# Detect execution mode
+$isPiped = (-not $PSScriptRoot -or $PSScriptRoot -eq "")
 
-# 1. PowerShell version
-if ($PSVersionTable.PSVersion.Major -lt 6) {
-    Write-Err "AETHER_01 installer requires PowerShell 7+"
-    Write-Host "       Detected: PowerShell $($PSVersionTable.PSVersion)"
-    Write-Host "       Install PS7: winget install Microsoft.PowerShell"
-    Write-Host "       Then run:    pwsh -c `"irm $RAW_URL/install.ps1 | iex`""
+if (-not $PSVersionTable.PSVersion.Major -ge 6) {
+    Write-Err "Requires PowerShell 7+ (detected: $($PSVersionTable.PSVersion))"
+    Write-Host "       winget install Microsoft.PowerShell"
     exit 2
 }
 
-# 2. Platform
 if (-not $IsWindows -and $PSVersionTable.Platform -ne "Win32NT") {
-    Write-Err "AETHER_01 is Windows-only (Windows 10/11 x64 required)"
-    Write-Host "       Detected platform: $($PSVersionTable.Platform)"
-    Write-Host "       AETHER_01 manages Windows APIs — it cannot run on non-Windows systems."
+    Write-Err "Windows 10/11 x64 required"
     exit 5
 }
+if (-not $env:USERPROFILE) { Write-Err "USERPROFILE not set"; exit 6 }
+if (-not $env:LOCALAPPDATA) { $env:LOCALAPPDATA = "$env:USERPROFILE\AppData\Local"; Write-Warn "LOCALAPPDATA fallback: $env:LOCALAPPDATA" }
 
-# 3. Check if essential env vars exist
-if (-not $env:USERPROFILE) {
-    Write-Err "Environment variable USERPROFILE is not set"
-    Write-Host "       This is required to locate agent config files."
-    Write-Host "       Set USERPROFILE to your user directory and retry."
-    exit 6
-}
+try { $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { $isAdmin = $false }
 
-if (-not $env:LOCALAPPDATA) {
-    # Fallback: create under USERPROFILE
-    $env:LOCALAPPDATA = "$env:USERPROFILE\AppData\Local"
-    Write-Warn "LOCALAPPDATA was not set — using $env:LOCALAPPDATA"
-}
+try { $Host.UI.RawUI.WindowTitle = "AETHER_01 — Installer" } catch { }
 
-# 4. Admin check
-try {
-    $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    $isAdmin   = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-catch {
-    $isAdmin = $false
-    Write-Warn "Could not determine admin status: $_"
-}
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "   AETHER_01 — Windows MCP Server Installer"               -ForegroundColor Cyan
+Write-Host "   PS $($PSVersionTable.PSVersion) — $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor DarkGray
+if ($isPiped) { Write-Host "   Source: remote (irm | iex)"               -ForegroundColor DarkGray }
+else          { Write-Host "   Source: local file"                       -ForegroundColor DarkGray }
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
 
 if (-not $isAdmin -and -not $NoAdminWarning) {
-    Write-Warn "Not running as Administrator"
-    Write-Host "       Most AETHER_01 tools require admin rights to operate."
-    Write-Host "       The MCP config WILL be added, but tools will fail."
+    Write-Warn "Not Administrator — MCP config will be added, but tools will fail without admin rights"
     Write-Host "       Suppress: install.ps1 -NoAdminWarning"
     Write-Host ""
 }
 
-# 5. Print header — safe in non-interactive contexts
-try { $Host.UI.RawUI.WindowTitle = "AETHER_01 — MCP Installer" } catch { }
-
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   AETHER_01 — Windows MCP Server Installer"               -ForegroundColor Cyan
-Write-Host "   PowerShell $($PSVersionTable.PSVersion) — $((Get-Date).ToString('yyyy-MM-dd HH:mm'))" -ForegroundColor DarkGray
-if ($isPiped) { Write-Host "   Running from: remote (irm | iex)"          -ForegroundColor DarkGray }
-else          { Write-Host "   Running from: local file"                  -ForegroundColor DarkGray }
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host ""
-
 # ════════════════════════════════════════════════════════════════════════
-# Utility: retry network-bound operations with backoff
+# Utility functions (retry, safe io, disk check)
 # ════════════════════════════════════════════════════════════════════════
-
-function Invoke-WithRetry {
-    param(
-        [ScriptBlock]$ScriptBlock,
-        [string]$OperationDescription,
-        [int]$MaxRetries = $RetryCount,
-        [int]$DelaySeconds = $RetryDelaySeconds
-    )
-
-    $attempt = 0
-    $errors  = @()
-
-    while ($attempt -lt $MaxRetries) {
-        $attempt++
-        try {
-            if ($attempt -gt 1) {
-                Write-Host "       Retry $attempt/$MaxRetries ..." -ForegroundColor DarkGray
-                Start-Sleep -Seconds $DelaySeconds
-            }
-            return & $ScriptBlock
-        }
-        catch {
-            $errors += $_
-            if ($attempt -ge $MaxRetries) {
-                throw "`"$OperationDescription`" failed after $MaxRetries attempts. Last error: $_`nAll errors: $($errors -join ' | ')"
-            }
-        }
-    }
+function Write-File-Safe { param([string]$LiteralPath, [string]$Content, [string]$Description)
+    $dir = [IO.Path]::GetDirectoryName($LiteralPath)
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
+    try { [IO.File]::WriteAllText($LiteralPath, $Content, [Text.UTF8Encoding]::new($false)); return } catch { Write-Dbg "Write to '$LiteralPath' failed: $_" }
+    $tmp = "$LiteralPath.aether-tmp-$(Get-Random)"
+    try { [IO.File]::WriteAllText($tmp, $Content, [Text.UTF8Encoding]::new($false)); Move-Item $tmp $LiteralPath -Force -ErrorAction Stop }
+    catch { Remove-Item $tmp -Force -ErrorAction SilentlyContinue; throw "Cannot write $Description to '$LiteralPath': $_" }
+}
+function Read-File-Safe { param([string]$LiteralPath)
+    if (-not (Test-Path $LiteralPath)) { return $null }
+    try { $raw = Get-Content $LiteralPath -Raw -Encoding UTF8 -ErrorAction Stop; if ([string]::IsNullOrWhiteSpace($raw)) { $null } else { $raw } } catch { $null }
+}
+function Backup-File { param([string]$LiteralPath, [string]$Reason)
+    if (-not (Test-Path $LiteralPath)) { return }
+    $bkp = "$LiteralPath.aether-backup-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+    try { Copy-Item $LiteralPath $bkp -Force -ErrorAction Stop; Write-Warn "$Reason — $bkp" } catch { Write-Dbg "Backup failed: $_" }
+}
+function Test-DiskSpace { param([string]$Path, [long]$Bytes)
+    $drv = [IO.Path]::GetPathRoot($Path); if (-not $drv) { return $true }
+    try { $di = [IO.DriveInfo]::new($drv); if ($di.AvailableFreeSpace -lt $Bytes) { Write-Err "Disk full on $drv"; return $false }; return $true } catch { return $true }
 }
 
 # ════════════════════════════════════════════════════════════════════════
-# Utility: safe file I/O with fallback paths
+# Step 1: Find or download binary (unchanged from previous version)
 # ════════════════════════════════════════════════════════════════════════
-
-function Write-File-Safe {
-    param(
-        [string]$LiteralPath,
-        [string]$Content,
-        [string]$Description
-    )
-
-    $dir = [System.IO.Path]::GetDirectoryName($LiteralPath)
-
-    if (-not (Test-Path -LiteralPath $dir)) {
-        try {
-            New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null
-        }
-        catch {
-            throw "Cannot create directory '$dir' for $Description`: $_"
-        }
-    }
-
-    try {
-        [System.IO.File]::WriteAllText($LiteralPath, $Content, [System.Text.UTF8Encoding]::new($false))
-        return
-    }
-    catch {
-        Write-Dbg "Primary write to '$LiteralPath' failed: $_"
-    }
-
-    $tempPath = "$LiteralPath.aether-tmp-$(Get-Random)"
-    try {
-        [System.IO.File]::WriteAllText($tempPath, $Content, [System.Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $tempPath -Destination $LiteralPath -Force -ErrorAction Stop
-    }
-    catch {
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-        throw "Cannot write $Description to '$LiteralPath' (tried atomic replace): $_"
-    }
-}
-
-function Read-File-Safe {
-    param([string]$LiteralPath, [string]$Description)
-
-    if (-not (Test-Path -LiteralPath $LiteralPath)) {
-        return $null
-    }
-
-    try {
-        $raw = Get-Content -LiteralPath $LiteralPath -Raw -Encoding UTF8 -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-        return $raw
-    }
-    catch {
-        Write-Dbg "Read-File-Safe '$LiteralPath' failed: $_"
-        return $null
-    }
-}
-
-function Backup-File {
-    param([string]$LiteralPath, [string]$Reason)
-
-    if (-not (Test-Path -LiteralPath $LiteralPath)) { return }
-
-    $timestamp = (Get-Date).ToString("yyyyMMdd-HHmmss")
-    $backupPath = "$LiteralPath.aether-backup-$timestamp"
-
-    try {
-        Copy-Item -LiteralPath $LiteralPath -Destination $backupPath -Force -ErrorAction Stop
-        Write-Warn "$Reason — backed up to: $backupPath"
-    }
-    catch {
-        Write-Dbg "Backup of '$LiteralPath' failed: $_ (non-fatal)"
-    }
-}
-
-# ════════════════════════════════════════════════════════════════════════
-# Utility: disk space check
-# ════════════════════════════════════════════════════════════════════════
-
-function Test-DiskSpace {
-    param([string]$Path, [long]$RequiredBytes)
-
-    $drive = [System.IO.Path]::GetPathRoot($Path)
-    if (-not $drive) { return $true }  # can't determine — don't block
-
-    try {
-        $driveInfo = [System.IO.DriveInfo]::new($drive)
-        if ($driveInfo.AvailableFreeSpace -lt $RequiredBytes) {
-            Write-Err "Insufficient disk space on ${drive}: needed $("{0:N0}" -f ($RequiredBytes / 1MB)) MB, available $("{0:N0}" -f ($driveInfo.AvailableFreeSpace / 1MB)) MB"
-            return $false
-        }
-        return $true
-    }
-    catch {
-        Write-Dbg "Disk space check failed: $_ (non-fatal)"
-        return $true
-    }
-}
-
-# ════════════════════════════════════════════════════════════════════════
-# Step 1: Find or download binary
-# ════════════════════════════════════════════════════════════════════════
-
 $exePath = $null
-
-# 1a — User-provided path
 if ($BinaryPath) {
-    if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
-        Write-Err "Provided binary path does not exist or is not a file: $BinaryPath"
-        exit 7
-    }
-    try {
-        $exePath = (Resolve-Path -LiteralPath $BinaryPath -ErrorAction Stop).Path
-        Write-Step "Using provided binary: $exePath"
-    }
-    catch {
-        Write-Err "Cannot resolve provided binary path '$BinaryPath': $_"
-        exit 8
-    }
+    if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) { Write-Err "Not a file: $BinaryPath"; exit 7 }
+    $exePath = (Resolve-Path -LiteralPath $BinaryPath -ErrorAction Stop).Path; Write-Step "Binary: $exePath"
 }
-
-# 1b — Auto-detect local build (only when running from disk, not from irm | iex)
 if (-not $exePath -and -not $isPiped -and $PSScriptRoot) {
-    Write-Dbg "Searching for local build in: $PSScriptRoot"
-
-    $searchPaths = @(
-        (Join-Path $PSScriptRoot "target\debug\$EXE_NAME"),
-        (Join-Path $PSScriptRoot "target\release\$EXE_NAME")
-    )
-
-    foreach ($searchPath in $searchPaths) {
-        if (Test-Path -LiteralPath $searchPath -PathType Leaf) {
-            $exePath = $searchPath
-            Write-Step "Found local build: $exePath"
-            break
-        }
-    }
-
-    # Deep search as last resort
-    if (-not $exePath) {
-        try {
-            $found = Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -Filter $EXE_NAME -Depth 5 -ErrorAction SilentlyContinue |
-                     Where-Object { $_.FullName -match "\\target\\(debug|release)\\" } |
-                     Select-Object -First 1
-            if ($found) {
-                $exePath = $found.FullName
-                Write-Step "Found local build (deep search): $exePath"
-            }
-        }
-        catch {
-            Write-Dbg "Deep search failed: $_"
-        }
-    }
+    foreach ($p in @("$PSScriptRoot\target\debug\$EXE_NAME","$PSScriptRoot\target\release\$EXE_NAME")) { if (Test-Path $p) { $exePath = $p; Write-Step "Local build: $exePath"; break } }
+    if (-not $exePath) { try { $f = Get-ChildItem $PSScriptRoot -Recurse -Filter $EXE_NAME -Depth 5 -ErrorAction SilentlyContinue | ? { $_ -match "\\target\\(debug|release)\\" } | select -First 1; if ($f) { $exePath = $f.FullName; Write-Step "Deep: $exePath" } } catch {} }
 }
-
-# 1c — Download from GitHub releases
 if (-not $exePath) {
-    Write-Warn "No local binary found. Will download from GitHub releases..."
-
-    if (-not (Test-DiskSpace $DownloadDir (120 * 1MB))) {
-        Write-Err "Cannot proceed — insufficient disk space for download"
-        exit 9
-    }
-
-    # Validate release exists before attempting download
-    $releaseExists = $false
-    try {
-        Invoke-RestMethod -Uri $API_URL -Method Head -TimeoutSec 10 -ErrorAction SilentlyContinue | Out-Null
-        $releaseExists = $true
-    }
-    catch {
-        Write-Dbg "Release API check failed: $_"
-    }
-
-    if (-not $releaseExists) {
-        Write-Warn "Release '$ReleaseTag' not found on GitHub API (may still exist)"
-    }
-
-    # Ensure download directory
-    try {
-        New-Item -ItemType Directory -Force -Path $DownloadDir -ErrorAction Stop | Out-Null
-    }
-    catch {
-        Write-Err "Cannot create download directory '$DownloadDir': $_"
-        exit 10
-    }
-
-    $downloadPath = Join-Path $DownloadDir $EXE_NAME
-    $releaseUrl   = "$REPO_URL/releases/download/$ReleaseTag/$EXE_NAME"
-
-    Write-Host "       URL:    $releaseUrl"        -ForegroundColor DarkGray
-    Write-Host "       Target: $downloadPath"       -ForegroundColor DarkGray
-    Write-Host "       (Binary ~110MB — this may take a minute)" -ForegroundColor DarkGray
-
-    # Download with retry logic
-    $downloadSuccess = $false
-    for ($attempt = 1; $attempt -le $RetryCount; $attempt++) {
+    Write-Warn "Downloading from GitHub..."
+    if (-not (Test-DiskSpace $DownloadDir (120*1MB))) { exit 9 }
+    try { New-Item -ItemType Directory -Force -Path $DownloadDir -ErrorAction Stop | Out-Null } catch { Write-Err "Cannot create $DownloadDir"; exit 10 }
+    $dlPath = Join-Path $DownloadDir $EXE_NAME
+    $dlUrl  = "$REPO_URL/releases/download/$ReleaseTag/$EXE_NAME"
+    Write-Host "       $dlUrl -> $dlPath" -ForegroundColor DarkGray
+    Write-Host "       (~110MB — please wait)" -ForegroundColor DarkGray
+    for ($a=1; $a -le $RetryCount; $a++) {
         try {
-            if ($attempt -gt 1) {
-                Write-Host "       Retry $attempt/$RetryCount ..." -ForegroundColor DarkGray
-                Start-Sleep -Seconds $RetryDelaySeconds
-            }
-
-            # Remove partial download from previous attempt
-            Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
-
-            Invoke-WebRequest -Uri $releaseUrl -OutFile $downloadPath -TimeoutSec $DownloadTimeoutSeconds -ErrorAction Stop
-
-            # Validate download
-            if (-not (Test-Path -LiteralPath $downloadPath)) {
-                throw "File not created on disk after download completes"
-            }
-
-            $downloadedSize = (Get-Item -LiteralPath $downloadPath).Length
-            if ($downloadedSize -lt $MIN_EXE_SIZE_BYTES) {
-                # Read what we got to diagnose
-                $badContent = try { Get-Content -LiteralPath $downloadPath -Raw -TotalCount 200 -ErrorAction SilentlyContinue } catch { "unreadable" }
-                Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
-                throw "Downloaded file is only $downloadedSize bytes (likely a GitHub error page). Content: $badContent"
-            }
-
-            # Verify it looks like a PE executable
-            try {
-                $header = [System.IO.File]::ReadAllBytes($downloadPath)
-                if ($header.Length -lt 2 -or $header[0] -ne 0x4D -or $header[1] -ne 0x5A) {
-                    Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
-                    throw "Downloaded file is not a valid Windows executable (missing MZ header)"
-                }
-            }
-            catch [System.IO.IOException] {
-                # If we can't read the header, the file might be locked — treat as partial
-                throw "Cannot validate downloaded file: $_"
-            }
-
-            $exePath = $downloadPath
-            $downloadSuccess = $true
-            Write-Step "Downloaded: $exePath ($("{0:N0}" -f ($downloadedSize / 1MB)) MB)"
-            break
-        }
-        catch {
-            if ($attempt -ge $RetryCount) {
-                Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
-                Write-Err "Download failed after $RetryCount attempts"
-                Write-Host "       URL: $releaseUrl"
-                Write-Host "       Error: $_"
-                Write-Host ""
-                Write-Host "       Possible causes:"
-                Write-Host "         1. No internet connection"
-                Write-Host "         2. GitHub is unreachable or rate-limited"
-                Write-Host "         3. Release $ReleaseTag has no compiled binary yet"
-                Write-Host "         4. Corporate proxy/firewall blocking downloads"
-                Write-Host "         5. Antivirus quarantining the file mid-download"
-                Write-Host ""
-                Write-Host "       Workarounds:"
-                Write-Host "         - Build locally:  git clone $REPO_URL && cd $REPO_NAME && cargo build --release"
-                Write-Host "         - Specify binary:  install.ps1 -BinaryPath C:\path\to\$EXE_NAME"
-                Write-Host "         - Download manually and run: install.ps1 -BinaryPath .\$EXE_NAME"
-                Write-Host "         - Check releases:    $REPO_URL/releases"
-                exit 3
-            }
-        }
+            if ($a -gt 1) { Write-Host "       Retry $a/$RetryCount..." -ForegroundColor DarkGray; Start-Sleep $RetryDelaySeconds }
+            Remove-Item $dlPath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $dlUrl -OutFile $dlPath -TimeoutSec $DownloadTimeoutSeconds -ErrorAction Stop
+            if (-not (Test-Path $dlPath)) { throw "Not written to disk" }
+            $sz = (Get-Item $dlPath).Length
+            if ($sz -lt $MIN_EXE_SIZE_BYTES) { $bc = try { Get-Content $dlPath -Raw -TotalCount 200 -EA SilentlyContinue } catch { "unreadable" }; Remove-Item $dlPath -Force -EA SilentlyContinue; throw "Too small: $sz bytes ($bc)" }
+            try { $hdr = [IO.File]::ReadAllBytes($dlPath); if ($hdr[0] -ne 0x4D -or $hdr[1] -ne 0x5A) { Remove-Item $dlPath -Force -EA SilentlyContinue; throw "Not a valid .exe (no MZ header)" } } catch [IO.IOException] { throw "Locked file: $_" }
+            $exePath = $dlPath; Write-Step "Downloaded: $exePath ($('{0:N0}' -f ($sz/1MB)) MB)"; break
+        } catch { if ($a -ge $RetryCount) { Remove-Item $dlPath -Force -EA SilentlyContinue; Write-Err "Download failed after $RetryCount attempts: $_"; Write-Host "       Build locally: git clone $REPO_URL && cargo build --release"; exit 3 } }
     }
 }
-
-# Final binary validation
-if (-not $exePath) {
-    Write-Err "Binary not set after all discovery methods"
-    exit 4
-}
-if (-not (Test-Path -LiteralPath $exePath)) {
-    Write-Err "Binary not found at: $exePath (deleted after discovery?)"
-    exit 4
-}
+if (-not $exePath -or -not (Test-Path $exePath)) { Write-Err "No binary"; exit 4 }
 
 # ════════════════════════════════════════════════════════════════════════
-# Step 2: Create .env file
+# Step 2: Create .env
 # ════════════════════════════════════════════════════════════════════════
-
-$envDir  = [System.IO.Path]::GetDirectoryName($exePath)
-if (-not $envDir) { $envDir = "." }
+$envDir  = [IO.Path]::GetDirectoryName($exePath); if (-not $envDir) { $envDir = "." }
 $envFile = Join-Path $envDir ".env"
-
 $envContent = @"
 # AETHER_01 — Feature Gates
-# 0 = disabled (safe, default)
-# 1 = enabled (administrator accepts risk)
-#
-# Docs: $REPO_URL#feature-gates-env
+# 0=disabled 1=enabled
 AETHER_BCD_EDIT=0
 AETHER_HAL_CONFIG=0
 AETHER_OFFLINE_REGISTRY=0
@@ -459,261 +161,257 @@ AETHER_DLL_INJECT=0
 AETHER_TOKEN_MANIPULATION=0
 AETHER_LSA_SECRETS=0
 "@
-
-if (Test-Path -LiteralPath $envFile) {
-    if ($Force) {
-        try {
-            Write-File-Safe $envFile $envContent ".env file"
-            Write-Step "Overwrote .env with defaults (--Force)"
-        }
-        catch {
-            Write-Err "Failed to overwrite .env`: $_"
-        }
-    }
-    else {
-        Write-Info ".env already exists — keeping existing configuration"
-        Write-Host "       To reset: install.ps1 --Force"
-    }
-}
-else {
-    try {
-        Write-File-Safe $envFile $envContent ".env file"
-        Write-Step "Created .env with safe defaults: $envFile"
-    }
-    catch {
-        Write-Err "Failed to create .env`: $_"
-        Write-Host "       AETHER_01 will start with all gates disabled (safe default)."
-        Write-Host "       Create $envFile manually if needed."
-    }
-}
+if (Test-Path $envFile) { if ($Force) { try { Write-File-Safe $envFile $envContent ".env"; Write-Step ".env overwritten" } catch { Write-Err ".env write failed: $_" } } else { Write-Info ".env exists — skip. Use --Force to overwrite." } }
+else { try { Write-File-Safe $envFile $envContent ".env"; Write-Step ".env created: $envFile" } catch { Write-Err ".env create failed: $_" } }
 
 # ════════════════════════════════════════════════════════════════════════
-# Step 3: MCP config builder
+# Step 3: MCP config engine
 # ════════════════════════════════════════════════════════════════════════
+$mcpEntry = @{ command = $exePath; env = @{ RUST_LOG = "info" } }
 
-$mcpEntry = @{
-    command = $exePath
-    env     = @{
-        RUST_LOG = "info"
-    }
+function Parse-McpConfig { param([string]$LiteralPath)
+    $raw = Read-File-Safe $LiteralPath; if (-not $raw) { return $null }
+    try { return $raw | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop } catch { return $null }
 }
 
-function Parse-McpConfig {
-    param([string]$LiteralPath)
-
-    $raw = Read-File-Safe $LiteralPath "MCP config"
-    if (-not $raw) { return $null }
-
-    try {
-        $obj = $raw | ConvertFrom-Json -AsHashtable -NoEnumerate -ErrorAction Stop
-        return $obj
-    }
-    catch {
-        Write-Dbg "Parse-McpConfig JSON parse error: $_"
-        return $null
-    }
-}
-
-function Add-McpServer {
-    param(
-        [string]$ConfigPath,
-        [string]$ClientName
-    )
+function Write-McpConfig {
+    param([string]$ConfigPath,[string]$ClientName,[string]$RootKey,[bool]$IsYaml=$false,[string]$YamlIndent="")
 
     Write-Host "       --- $ClientName ---" -ForegroundColor Magenta
+    $configDir = [IO.Path]::GetDirectoryName($ConfigPath)
+    if (-not (Test-Path $configDir)) { try { New-Item -ItemType Directory -Force -Path $configDir -ErrorAction Stop | Out-Null } catch { Write-Err "Cannot create dir '$configDir' for $ClientName`: $_"; return } }
 
-    # Ensure parent directory exists
-    $configDir = [System.IO.Path]::GetDirectoryName($ConfigPath)
-    if (-not (Test-Path -LiteralPath $configDir)) {
-        try {
-            New-Item -ItemType Directory -Force -Path $configDir -ErrorAction Stop | Out-Null
+    # ── YAML path (Continue.dev, Goose) ────────────────────────────────
+    if ($IsYaml) {
+        if (Test-Path $ConfigPath) {
+            $existingYaml = Read-File-Safe $ConfigPath
+            if ($existingYaml -match "aether-01") {
+                if ($Force) { Write-Warn "${ClientName}: already configured — overwriting (--Force)" }
+                else { Write-Info "${ClientName}: already configured — skip. Use --Force to overwrite."; return }
+            }
         }
-        catch {
-            Write-Err "Cannot create config directory '$configDir' for $ClientName`: $_"
-            return
+        # Append aether entry
+        $yamlEntry = @"
+$YamlIndent  aether-01:
+$YamlIndent    command: $($exePath -replace '\\','/')
+$YamlIndent    env:
+$YamlIndent      RUST_LOG: info
+"@
+        if (Test-Path $ConfigPath) {
+            $content = Read-File-Safe $ConfigPath
+            if ($content -match "mcpServers:") {
+                $content = $content -replace "(mcpServers:\r?\n)", "`$1$yamlEntry"
+            } else {
+                $content = "mcpServers:`n$yamlEntry`n$content"
+            }
+            try { Write-File-Safe $ConfigPath $content "YAML config for $ClientName" } catch { Write-Err "Cannot write YAML for $ClientName`: $_"; return }
+        } else {
+            try { Write-File-Safe $ConfigPath "mcpServers:`n$yamlEntry" "YAML config for $ClientName" } catch { Write-Err "Cannot create YAML for $ClientName`: $_"; return }
         }
-    }
-
-    # Parse existing config (catches invalid JSON, empty files, permission errors)
-    $existing = $null
-    if (Test-Path -LiteralPath $ConfigPath) {
-        $existing = Parse-McpConfig $ConfigPath
-        if ($null -eq $existing) {
-            # File exists but is invalid → back it up
-            Backup-File $ConfigPath "Invalid or empty JSON"
-        }
-    }
-
-    # Build new config
-    if ($null -eq $existing) {
-        $newConfig = @{ mcpServers = @{ "aether-01" = $mcpEntry } }
-        try {
-            $json = $newConfig | ConvertTo-Json -Depth 10 -Compress
-            Write-File-Safe $ConfigPath $json "MCP config for $ClientName"
-            Write-Step "${ClientName}: created new config"
-        }
-        catch {
-            Write-Err "Cannot write MCP config for $ClientName`: $_"
-        }
+        Write-Step "${ClientName}: added to YAML config"
         return
     }
 
-    # Normalize mcpServers key
-    if (-not $existing.ContainsKey("mcpServers") -or $existing["mcpServers"] -isnot [hashtable]) {
-        $existing["mcpServers"] = @{}
+    # ── JSON path (all others) ─────────────────────────────────────────
+    $existing = $null
+    if (Test-Path $ConfigPath) { $existing = Parse-McpConfig $ConfigPath; if ($null -eq $existing) { Backup-File $ConfigPath "Invalid JSON" } }
+    if ($null -eq $existing) {
+        $newCfg = @{ $RootKey = @{ "aether-01" = $mcpEntry } }
+        try { Write-File-Safe $ConfigPath ($newCfg | ConvertTo-Json -Depth 10 -Compress) "JSON for $ClientName"; Write-Step "${ClientName}: created" }
+        catch { Write-Err "Write $ClientName` failed: $_" }
+        return
     }
-
-    # Check if already installed
-    if ($existing["mcpServers"].ContainsKey("aether-01")) {
-        if ($Force) {
-            $existing["mcpServers"]["aether-01"] = $mcpEntry
-            try {
-                $json = $existing | ConvertTo-Json -Depth 10 -Compress
-                Write-File-Safe $ConfigPath $json "MCP config for $ClientName"
-                Write-Step "${ClientName}: updated existing config (--Force)"
-            }
-            catch {
-                Write-Err "Cannot update MCP config for $ClientName`: $_"
-            }
-        }
-        else {
-            Write-Info "${ClientName}: AETHER_01 already configured — skipping"
-            Write-Host "              To overwrite: install.ps1 --Force"
-        }
-    }
-    else {
-        $existing["mcpServers"]["aether-01"] = $mcpEntry
-        try {
-            $json = $existing | ConvertTo-Json -Depth 10 -Compress
-            Write-File-Safe $ConfigPath $json "MCP config for $ClientName"
-            Write-Step "${ClientName}: added AETHER_01"
-        }
-        catch {
-            Write-Err "Cannot write MCP config for $ClientName`: $_"
-        }
+    if (-not $existing.ContainsKey($RootKey) -or $existing[$RootKey] -isnot [hashtable]) { $existing[$RootKey] = @{} }
+    if ($existing[$RootKey].ContainsKey("aether-01")) {
+        if ($Force) { $existing[$RootKey]["aether-01"] = $mcpEntry; try { Write-File-Safe $ConfigPath ($existing | ConvertTo-Json -Depth 10 -Compress) "JSON for $ClientName"; Write-Step "${ClientName}: updated (--Force)" } catch { Write-Err "Update $ClientName` failed: $_" } }
+        else { Write-Info "${ClientName}: already installed — skip. Use --Force to overwrite." }
+    } else {
+        $existing[$RootKey]["aether-01"] = $mcpEntry
+        try { Write-File-Safe $ConfigPath ($existing | ConvertTo-Json -Depth 10 -Compress) "JSON for $ClientName"; Write-Step "${ClientName}: added" }
+        catch { Write-Err "Write $ClientName` failed: $_" }
     }
 }
 
 # ════════════════════════════════════════════════════════════════════════
-# Step 4: Detect environments and install
+# Step 4: Environment catalog (14+ editors/IDEs/plugins)
 # ════════════════════════════════════════════════════════════════════════
 
-# Build target set
-$targetSet  = [System.Collections.Generic.HashSet[string]]::new()
-$autoMode   = ($Targets -contains "auto")
+$ALL_ENVIRONMENTS = @(
 
-if ($Targets -contains "all") {
-    $autoMode = $true
-    foreach ($t in @("cursor","claude","windsurf","vscode")) { $targetSet.Add($t) | Out-Null }
+    # ─── AI-first editors ──────────────────────────────────────────────
+    @{ Key="cursor";       Dir="$env:USERPROFILE\.cursor";                         Config="$env:USERPROFILE\.cursor\mcp.json";                                                   Root="mcpServers";     Name="Cursor (AI-first IDE)";                    Icon="🖥️" },
+    @{ Key="windsurf";     Dir="$env:USERPROFILE\.codeium\windsurf";               Config="$env:USERPROFILE\.codeium\windsurf\mcp_config.json";                                 Root="mcpServers";     Name="Windsurf (Codeium Cascade)";               Icon="🌊" },
+    @{ Key="claude-dt";    Dir="$env:APPDATA\Claude";                               Config="$env:APPDATA\Claude\claude_desktop_config.json";                                      Root="mcpServers";     Name="Claude Desktop (Anthropic)";               Icon="🧠" },
+
+    # ─── Microsoft ecosystem ───────────────────────────────────────────
+    @{ Key="vscode-mcp";   Dir="$env:APPDATA\Code";                                Config="$env:APPDATA\Code\User\globalStorage\anthropic.claude-mcp\mcp.json";                  Root="mcpServers";     Name="VS Code (MCP extension)";                  Icon="🔵" },
+    @{ Key="vscode-copilot";Dir="$env:APPDATA\Code";                               Config="$env:USERPROFILE\.vscode\mcp.json";                                                    Root="servers";        Name="VS Code (GitHub Copilot)";                 Icon="🤖" },
+
+    # ─── Open-source agents ────────────────────────────────────────────
+    @{ Key="cline";         Dir="$env:APPDATA\Code";                                Config="$env:APPDATA\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"; Root="mcpServers"; Name="Cline (VS Code Agent)";                Icon="🤖" },
+    @{ Key="continue";      Dir="$env:USERPROFILE\.continue";                       Config="$env:USERPROFILE\.continue\config.yaml";                                               Root="mcpServers";     Name="Continue.dev (OSS AI Assistant)";          Icon="🔄";  Yaml=$true; Indent="  " },
+
+    # ─── Terminal / CLI ────────────────────────────────────────────────
+    @{ Key="claude-code";   Dir="$env:USERPROFILE";                                 Config="$env:USERPROFILE\.claude.json";                                                         Root="mcpServers";     Name="Claude Code (Anthropic CLI)";              Icon="⌨️" },
+    @{ Key="gemini-cli";    Dir="$env:USERPROFILE";                                 Config="$env:USERPROFILE\.gemini\mcp.json";                                                      Root="mcpServers";     Name="Gemini CLI (Google)";                      Icon="🌐" },
+
+    # ─── High-performance editors ──────────────────────────────────────
+    @{ Key="zed";           Dir="$env:USERPROFILE\.config\zed";                     Config="$env:USERPROFILE\.config\zed\settings.json";                                            Root="context_servers"; Name="Zed (Rust-native IDE)";                Icon="⚡" },
+
+    # ─── JetBrains ecosystem ───────────────────────────────────────────
+    @{ Key="jetbrains-idea";Dir="$env:APPDATA\JetBrains\IntelliJIdea2025.1";       Config="$env:APPDATA\JetBrains\IntelliJIdea2025.1\options\mcp-settings.xml";                  Root="mcpServers";     Name="IntelliJ IDEA (JetBrains)";                Icon="🧩" },
+    @{ Key="jetbrains-pc";  Dir="$env:APPDATA\JetBrains\PyCharm2025.1";            Config="$env:APPDATA\JetBrains\PyCharm2025.1\options\mcp-settings.xml";                       Root="mcpServers";     Name="PyCharm (JetBrains)";                      Icon="🐍" },
+    @{ Key="jetbrains-ws";  Dir="$env:APPDATA\JetBrains\WebStorm2025.1";           Config="$env:APPDATA\JetBrains\WebStorm2025.1\options\mcp-settings.xml";                      Root="mcpServers";     Name="WebStorm (JetBrains)";                     Icon="🌐" },
+
+    # ─── Other environments ────────────────────────────────────────────
+    @{ Key="goose";         Dir="$env:USERPROFILE\.config\goose";                   Config="$env:USERPROFILE\.config\goose\config.yaml";                                            Root="extensions";      Name="Goose (Block/Square Agent)";               Icon="🦆";  Yaml=$true; Indent="" }
+)
+
+# ════════════════════════════════════════════════════════════════════════
+# Step 5: Interactive menu system
+# ════════════════════════════════════════════════════════════════════════
+
+function Show-Menu {
+    param([array]$Options, [string]$Title, [string]$Prompt)
+
+    Write-Host ""
+    Write-Host $Title -ForegroundColor Cyan
+    Write-Host ("─" * 65) -ForegroundColor DarkGray
+
+    $selected = @{}
+    $optionsMap = @{}
+
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        $num  = $i + 1
+        $opt  = $Options[$i]
+        $key  = $opt.Key
+        $name = $opt.Name
+        $found = Test-Path -LiteralPath $opt.Dir -ErrorAction SilentlyContinue
+        $icon = if ($found) { $opt.Icon } else { "⬜" }
+        $status = if ($found) { "FOUND" } else { "not installed" }
+        $sc = if ($found) { "Green" } else { "DarkGray" }
+        $optionsMap[$num] = $opt
+        Write-Host "  [$num] $icon  $name" -ForegroundColor White -NoNewline
+        Write-Host "  ($status)" -ForegroundColor $sc
+    }
+
+    Write-Host ("─" * 65) -ForegroundColor DarkGray
+    Write-Host "  [A]  ALL — select all found environments"
+    Write-Host "  [S]  SKIP — don't install into any editor"
+    Write-Host "  [Q]  QUIT — abort installation entirely"
+    Write-Host ("─" * 65) -ForegroundColor DarkGray
+
+    Write-Host ""
+    Write-Host $Prompt -ForegroundColor Yellow -NoNewline
+    Write-Host " " -NoNewline
+    $input = (Read-Host).Trim().ToUpperInvariant()
+
+    $result = @()
+    switch ($input) {
+        "Q"    { Write-Host ""; Write-Err "Installation cancelled by user"; exit 0 }
+        "S"    { Write-Host ""; Write-Info "Skipping editor installation — binary and .env are ready"; return @() }
+        "A"    { foreach ($idx in $optionsMap.Keys | Sort-Object) { $opt = $optionsMap[$idx]; if (Test-Path $opt.Dir) { $result += $opt } }; break }
+        default {
+            foreach ($part in ($input -split '[\s,;]+')) {
+                $num = try { [int]$part } catch { 0 }
+                if ($num -gt 0 -and $optionsMap.ContainsKey($num)) { $result += $optionsMap[$num] }
+            }
+        }
+    }
+
+    if ($result.Count -eq 0) {
+        Write-Warn "No valid selections — installing only binary and .env"
+    }
+
+    return $result
 }
 
-foreach ($t in ($Targets | Where-Object { $_ -ne "auto" -and $_ -ne "all" })) {
-    $targetSet.Add($t) | Out-Null
+# ════════════════════════════════════════════════════════════════════════
+# Step 6: Dispatch: silent mode or interactive menu
+# ════════════════════════════════════════════════════════════════════════
+
+$toInstall = @()
+
+if ($Silent -or ($Targets.Count -gt 0 -and $Targets[0] -ne "")) {
+    # ── Silent / CLI mode ──────────────────────────────────────────────
+    $targetSet  = [Collections.Generic.HashSet[string]]::new()
+    $autoMode   = ($Targets -contains "auto" -or $Targets.Count -eq 0 -or ($Targets.Count -eq 1 -and $Targets[0] -eq ""))
+
+    if ($Targets -contains "all" -or $autoMode) {
+        foreach ($env in $ALL_ENVIRONMENTS) { $targetSet.Add($env.Key) | Out-Null }
+    }
+    foreach ($t in ($Targets | Where-Object { $_ -ne "auto" -and $_ -ne "all" -and $_ -ne "" })) { $targetSet.Add($t) | Out-Null }
+
+    foreach ($env in $ALL_ENVIRONMENTS) {
+        if (($autoMode -or $targetSet.Contains($env.Key)) -and (Test-Path $env.Dir)) { $toInstall += $env }
+    }
 }
+else {
+    # ── Interactive menu ───────────────────────────────────────────────
+    $menuOptions = $ALL_ENVIRONMENTS | Where-Object {
+        # Filter: only show items where the parent directory structure makes sense
+        # (JetBrains versions are wild — show all variants; users see which exist)
+        $true
+    }
+
+    $toInstall = @(Show-Menu $menuOptions "Select editors to install AETHER_01 into:" "Enter numbers, 'A' for all, 'S' to skip, 'Q' to quit:")
+}
+
+# ════════════════════════════════════════════════════════════════════════
+# Step 7: Install into chosen environments
+# ════════════════════════════════════════════════════════════════════════
 
 $installedCount = 0
 $skippedCount   = 0
 $failedCount    = 0
 
-# ── Environment definitions ─────────────────────────────────────────────
-
-$environments = @(
-    @{
-        Key       = "cursor"
-        Dir       = "$env:USERPROFILE\.cursor"
-        Config    = "$env:USERPROFILE\.cursor\mcp.json"
-        Name      = "Cursor"
-    },
-    @{
-        Key       = "claude"
-        Dir       = "$env:APPDATA\Claude"
-        Config    = "$env:APPDATA\Claude\claude_desktop_config.json"
-        Name      = "Claude Desktop"
-    },
-    @{
-        Key       = "windsurf"
-        Dir       = "$env:USERPROFILE\.codeium\windsurf"
-        Config    = "$env:USERPROFILE\.codeium\windsurf\mcp_config.json"
-        Name      = "Windsurf"
-    },
-    @{
-        Key       = "vscode"
-        Dir       = "$env:APPDATA\Code"
-        Config    = "$env:APPDATA\Code\User\globalStorage\anthropic.claude-mcp\mcp.json"
-        Name      = "VS Code (Claude MCP)"
-    }
-)
-
-foreach ($env in $environments) {
-    if (-not ($autoMode -or $targetSet.Contains($env.Key))) { continue }
-
-    if (Test-Path -LiteralPath $env.Dir) {
-        try {
-            Add-McpServer $env.Config $env.Name
-            $installedCount++
-        }
-        catch {
-            Write-Err "$($env.Name): unexpected error — $_"
-            $failedCount++
-        }
-    }
-    else {
-        if (-not $autoMode) {
-            Write-Warn "$($env.Name): directory not found — $($env.Dir)"
-        }
-        elseif ($autoMode) {
-            Write-Host "       [--] $($env.Name): not found (skipping)" -ForegroundColor DarkGray
-        }
+foreach ($env in $toInstall) {
+    if (-not (Test-Path -LiteralPath $env.Dir)) {
+        Write-Host "       [--] $($env.Icon) $($env.Name): not found — skipping" -ForegroundColor DarkGray
         $skippedCount++
+        continue
+    }
+    try {
+        Write-McpConfig -ConfigPath $env.Config -ClientName "$($env.Icon) $($env.Name)" -RootKey $env.Root `
+                        -IsYaml:($env.Yaml -eq $true) -YamlIndent:($env.Indent)
+        $installedCount++
+    }
+    catch {
+        Write-Err "$($env.Name): $_"
+        $failedCount++
     }
 }
 
 # ════════════════════════════════════════════════════════════════════════
-# Step 5: Summary
+# Step 8: Summary
 # ════════════════════════════════════════════════════════════════════════
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   Installation Summary"                                      -ForegroundColor Cyan
+Write-Host "   Installation Complete"                                    -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   Binary:       $exePath"                                   -ForegroundColor White
-Write-Host "   .env:         $envFile"                                   -ForegroundColor White
-Write-Host "   Installed:    $installedCount environment(s)"              -ForegroundColor Green
+Write-Host "   Binary:    $exePath"                                      -ForegroundColor White
+Write-Host "   .env:      $envFile"                                      -ForegroundColor White
+Write-Host "   Installed: $installedCount environment(s)"                -ForegroundColor Green
+if ($skippedCount -gt 0) { Write-Host "   Skipped:   $skippedCount"     -ForegroundColor DarkGray }
+if ($failedCount  -gt 0) { Write-Host "   Failed:    $failedCount"      -ForegroundColor Red }
 
-if ($skippedCount -gt 0) {
-    Write-Host "   Not found:    $skippedCount environment(s)"            -ForegroundColor DarkGray
-}
-
-if ($failedCount -gt 0) {
-    Write-Host "   Failed:       $failedCount environment(s)"            -ForegroundColor Red
-}
-
-if ($script:warnings.Count -gt 0) {
-    Write-Host ""
-    Write-Host "   Warnings:" -ForegroundColor Yellow
-    foreach ($w in $script:warnings) { Write-Host "     - $w" -ForegroundColor DarkGray }
-}
-
-if ($script:errors.Count -gt 0) {
-    Write-Host ""
-    Write-Host "   Errors encountered:" -ForegroundColor Red
-    foreach ($e in $script:errors) { Write-Host "     - $e" -ForegroundColor Red }
-}
+if ($script:warnings.Count -gt 0) { Write-Host ""; Write-Host "   Warnings:" -ForegroundColor Yellow; foreach ($w in $script:warnings) { Write-Host "     - $w" -ForegroundColor DarkGray } }
+if ($script:errors.Count   -gt 0) { Write-Host ""; Write-Host "   Errors:"   -ForegroundColor Red;    foreach ($e in $script:errors)   { Write-Host "     - $e" -ForegroundColor Red } }
 
 Write-Host ""
 Write-Host "   Next steps:" -ForegroundColor Cyan
-Write-Host "     1. Close and reopen your agent application"              -ForegroundColor White
-Write-Host "     2. Check that AETHER_01 appears in the MCP panel"        -ForegroundColor White
-Write-Host "     3. If not, check logs in your agent's MCP settings"      -ForegroundColor White
+Write-Host "     1. Restart your editor/IDE"                            -ForegroundColor White
+Write-Host "     2. Check AETHER_01 in the MCP panel"                   -ForegroundColor White
+Write-Host "     3. For JetBrains: Settings → Tools → MCP → Refresh"    -ForegroundColor White
+Write-Host "     4. For Continue.dev: restart the extension"            -ForegroundColor White
 Write-Host ""
 
 if (-not $isAdmin -and -not $NoAdminWarning) {
-    Write-Host "   REMINDER: Run agent as Administrator for full access."  -ForegroundColor Magenta
+    Write-Host "   REMINDER: Run editor as Administrator."               -ForegroundColor Magenta
     Write-Host ""
 }
 
 Write-Host "============================================================" -ForegroundColor Cyan
 
-# Exit with the worst error code accumulated
 exit $script:exitCode
-
