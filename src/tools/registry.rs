@@ -8,7 +8,7 @@
 #![allow(unsafe_code)]
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 use serde_json::{json, Value};
 use std::process::Command;
@@ -66,9 +66,12 @@ pub fn handle_registry_editor(
         "import" => handle_import(params),
         "offline_mount" => handle_offline_mount(server, params),
         "offline_unmount" => handle_offline_unmount(server, params),
-        other => Err(AetherError::InvalidParameter(format!(
-            "Unknown registry action: {other}"
-        ))),
+        other => {
+            let ctx = ErrorContext::new("registry_editor", "unknown");
+            Err(AetherError::invalid_param(ctx, format!(
+                "Unknown registry action: {other}"
+            )))
+        }
     }
 }
 
@@ -77,11 +80,11 @@ pub fn handle_registry_editor(
 // ═══════════════════════════════════════════════════════════════════════════════════
 
 /// Extracts a required string parameter from the JSON params object.
-fn get_param_str<'a>(params: &'a Value, key: &str) -> std::result::Result<&'a str, AetherError> {
+fn get_param_str<'a>(ctx: ErrorContext, params: &'a Value, key: &str) -> std::result::Result<&'a str, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::InvalidParameter(format!("Missing or invalid parameter: {key}")))
+        .ok_or_else(|| AetherError::invalid_param(ctx, format!("Missing or invalid parameter: {key}")))
 }
 
 /// Extracts an optional string parameter.
@@ -101,7 +104,7 @@ fn get_param_bool(params: &Value, key: &str) -> bool {
 ///
 /// Supports: HKLM / HKEY_LOCAL_MACHINE, HKCU / HKEY_CURRENT_USER,
 /// HKU / HKEY_USERS, HKCR / HKEY_CLASSES_ROOT, HKCC / HKEY_CURRENT_CONFIG.
-fn resolve_hive(hive: &str) -> std::result::Result<windows_registry::Key, AetherError> {
+fn resolve_hive(ctx: ErrorContext, hive: &str) -> std::result::Result<windows_registry::Key, AetherError> {
     match hive.to_uppercase().as_str() {
         "HKLM" | "HKEY_LOCAL_MACHINE" => Ok(LOCAL_MACHINE.as_raw()),
         "HKCU" | "HKEY_CURRENT_USER" => Ok(CURRENT_USER.as_raw()),
@@ -110,7 +113,7 @@ fn resolve_hive(hive: &str) -> std::result::Result<windows_registry::Key, Aether
         "HKCC" | "HKEY_CURRENT_CONFIG" => {
             Ok(0x80000005u32 as *mut std::ffi::c_void)
         }
-        _ => Err(AetherError::InvalidParameter(format!(
+        _ => Err(AetherError::invalid_param(ctx, format!(
             "Unknown hive: {hive}"
         ))),
     }
@@ -123,7 +126,7 @@ fn resolve_hive(hive: &str) -> std::result::Result<windows_registry::Key, Aether
 
 /// Resolves a hive name to a raw `windows::Win32::Foundation::HKEY` for use with
 /// the `windows` crate's low-level functions.
-fn resolve_hive_raw(hive: &str) -> std::result::Result<WinHKEY, AetherError> {
+fn resolve_hive_raw(ctx: ErrorContext, hive: &str) -> std::result::Result<WinHKEY, AetherError> {
     match hive.to_uppercase().as_str() {
         "HKLM" | "HKEY_LOCAL_MACHINE" => {
             Ok(WinHKEY(LOCAL_MACHINE.as_raw()))
@@ -136,7 +139,7 @@ fn resolve_hive_raw(hive: &str) -> std::result::Result<WinHKEY, AetherError> {
             Ok(WinHKEY(CLASSES_ROOT.as_raw()))
         }
         "HKCC" | "HKEY_CURRENT_CONFIG" => Ok(WinHKEY(0x8000_0005u32 as *mut std::ffi::c_void)),
-        _ => Err(AetherError::InvalidParameter(format!(
+        _ => Err(AetherError::invalid_param(ctx, format!(
             "Unknown hive: {hive}"
         ))),
     }
@@ -154,20 +157,20 @@ fn hive_is_hklm(hive: &str) -> bool {
 }
 
 /// Checks the force flag and returns a `PermissionDenied` error if it is not set.
-fn require_force(params: &Value) -> std::result::Result<(), AetherError> {
+fn require_force(ctx: ErrorContext, params: &Value) -> std::result::Result<(), AetherError> {
     if !get_param_bool(params, "force") {
-        return Err(AetherError::PermissionDenied(
-            "This registry operation requires force: true".into(),
+        return Err(AetherError::permission_denied(ctx,
+            "This registry operation requires force: true",
         ));
     }
     Ok(())
 }
 
 /// Checks the force flag when writing to HKLM specifically.
-fn require_force_for_hklm(hive: &str, params: &Value) -> std::result::Result<(), AetherError> {
+fn require_force_for_hklm(ctx: ErrorContext, hive: &str, params: &Value) -> std::result::Result<(), AetherError> {
     if hive_is_hklm(hive) && !get_param_bool(params, "force") {
-        return Err(AetherError::PermissionDenied(
-            "Writing to HKLM requires force: true".into(),
+        return Err(AetherError::permission_denied(ctx,
+            "Writing to HKLM requires force: true",
         ));
     }
     Ok(())
@@ -176,6 +179,7 @@ fn require_force_for_hklm(hive: &str, params: &Value) -> std::result::Result<(),
 /// Opens a registry key with the specified access mask using the raw Windows API.
 /// The caller must close the returned handle with `RegCloseKey`.
 fn raw_open_key(
+    ctx: ErrorContext,
     hive: WinHKEY,
     key_path: &str,
     access: REG_SAM_FLAGS,
@@ -192,7 +196,7 @@ fn raw_open_key(
         )
     };
     if result.0 != 0 {
-        return Err(AetherError::not_found(format!("Failed to open registry key '{key_path}': error {}", result.0)));
+        return Err(AetherError::not_found(ctx, format!("Failed to open registry key '{key_path}': error {}", result.0), None));
     }
     Ok(handle)
 }
@@ -213,14 +217,15 @@ fn key_display(hive: &str, key_path: &str) -> String {
 /// Expected params: `hive`, `key_path`, `value_name`.
 /// Returns a JSON object with `type` and `value` fields.
 fn handle_read(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
-    let value_name = get_param_str(&params, "value_name")?;
+    let ctx = ErrorContext::new("registry_editor", "read");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
+    let value_name = get_param_str(ctx.clone(), &params, "value_name")?;
 
-    let hkey = resolve_hive(hive)?;
+    let hkey = resolve_hive(ctx.clone(), hive)?;
     let key = hkey
         .open(key_path)
-        .map_err(|e| AetherError::not_found(format!("Registry key not found: {key_path} ({e})")))?;
+        .map_err(|e| AetherError::not_found(ctx.clone(), format!("Registry key not found: {key_path} ({e})"), None))?;
 
     // Attempt type detection in order: DWORD, QWORD, then string.
     if let Ok(v) = key.get_u32(value_name) {
@@ -237,10 +242,10 @@ fn handle_read(params: Value) -> std::result::Result<String, AetherError> {
     }
 
     audit::log_failure("registry", "read", "value not found or unsupported type");
-    Err(AetherError::not_found(format!(
+    Err(AetherError::not_found(ctx, format!(
         "Registry value '{value_name}' not found in {}\\{}",
         hive, key_path
-    )))
+    ), None))
 }
 
 // ── write ───────────────────────────────────────────────────────────────────────
@@ -253,47 +258,48 @@ fn handle_read(params: Value) -> std::result::Result<String, AetherError> {
 /// Supported `value_type`s: `dword`, `qword`, `string`, `expand_string`,
 /// `multi_string`, `binary`.
 fn handle_write(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
-    let value_name = get_param_str(&params, "value_name")?;
-    let value_type = get_param_str(&params, "value_type")?;
+    let ctx = ErrorContext::new("registry_editor", "write");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
+    let value_name = get_param_str(ctx.clone(), &params, "value_name")?;
+    let value_type = get_param_str(ctx.clone(), &params, "value_type")?;
 
-    require_force_for_hklm(hive, &params)?;
+    require_force_for_hklm(ctx.clone(), hive, &params)?;
 
-    let hkey = resolve_hive(hive)?;
+    let hkey = resolve_hive(ctx.clone(), hive)?;
     let key = hkey
         .create(key_path)
-        .map_err(|e| AetherError::Win32Error(format!("Failed to create/open registry key: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "RegCreateKey", format!("Failed to create/open registry key: {e}")))?;
 
     match value_type {
         "dword" => {
-            let v: u32 = value_to_u32(&params)?;
+            let v: u32 = value_to_u32(ctx.clone(), &params)?;
             key.set_u32(value_name, v)
-                .map_err(|e| AetherError::Win32Error(format!("set_u32 failed: {e}")))?;
+                .map_err(|e| AetherError::win32(ctx.clone(), "RegSetValue", format!("set_u32 failed: {e}")))?;
         }
         "qword" => {
-            let v: u64 = value_to_u64(&params)?;
+            let v: u64 = value_to_u64(ctx.clone(), &params)?;
             key.set_u64(value_name, v)
-                .map_err(|e| AetherError::Win32Error(format!("set_u64 failed: {e}")))?;
+                .map_err(|e| AetherError::win32(ctx.clone(), "RegSetValue", format!("set_u64 failed: {e}")))?;
         }
         "string" => {
-            let v = value_to_str(&params)?;
+            let v = value_to_str(ctx.clone(), &params)?;
             key.set_string(value_name, v)
-                .map_err(|e| AetherError::Win32Error(format!("set_string failed: {e}")))?;
+                .map_err(|e| AetherError::win32(ctx.clone(), "RegSetValue", format!("set_string failed: {e}")))?;
         }
         "expand_string" => {
-            let v = value_to_str(&params)?;
-            write_raw_value(&key, value_name, v, windows_registry::Type::ExpandString)?;
+            let v = value_to_str(ctx.clone(), &params)?;
+            write_raw_value(ctx.clone(), &key, value_name, v, windows_registry::Type::ExpandString)?;
         }
         "multi_string" => {
-            let v = value_to_str(&params)?;
-            write_raw_value(&key, value_name, v, windows_registry::Type::MultiString)?;
+            let v = value_to_str(ctx.clone(), &params)?;
+            write_raw_value(ctx.clone(), &key, value_name, v, windows_registry::Type::MultiString)?;
         }
         "binary" => {
-            write_binary_value(&params, &key, value_name)?;
+            write_binary_value(ctx.clone(), &params, &key, value_name)?;
         }
         other => {
-            return Err(AetherError::InvalidParameter(format!(
+            return Err(AetherError::invalid_param(ctx, format!(
                 "Unknown value_type: {other}. Supported: dword, qword, string, expand_string, multi_string, binary"
             )));
         }
@@ -309,32 +315,33 @@ fn handle_write(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 /// Extracts a u32 from the `"value"` field of params.
-fn value_to_u32(params: &Value) -> std::result::Result<u32, AetherError> {
+fn value_to_u32(ctx: ErrorContext, params: &Value) -> std::result::Result<u32, AetherError> {
     params
         .get("value")
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
-        .ok_or_else(|| AetherError::InvalidParameter("value must be a u32 integer".into()))
+        .ok_or_else(|| AetherError::invalid_param(ctx, "value must be a u32 integer"))
 }
 
 /// Extracts a u64 from the `"value"` field of params.
-fn value_to_u64(params: &Value) -> std::result::Result<u64, AetherError> {
+fn value_to_u64(ctx: ErrorContext, params: &Value) -> std::result::Result<u64, AetherError> {
     params
         .get("value")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| AetherError::InvalidParameter("value must be a u64 integer".into()))
+        .ok_or_else(|| AetherError::invalid_param(ctx, "value must be a u64 integer"))
 }
 
 /// Extracts a string from the `"value"` field of params.
-fn value_to_str<'a>(params: &'a Value) -> std::result::Result<&'a str, AetherError> {
+fn value_to_str<'a>(ctx: ErrorContext, params: &'a Value) -> std::result::Result<&'a str, AetherError> {
     params
         .get("value")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::InvalidParameter("value must be a string".into()))
+        .ok_or_else(|| AetherError::invalid_param(ctx, "value must be a string"))
 }
 
 /// Writes an expand-string or multi-string value using the low-level `set_value` API.
 fn write_raw_value(
+    ctx: ErrorContext,
     key: &Key,
     name: &str,
     data: &str,
@@ -354,38 +361,38 @@ fn write_raw_value(
             .collect()
     };
     key.set_bytes(name, ty, &bytes)
-        .map_err(|e| AetherError::Win32Error(format!("set_value failed: {e}")))
+        .map_err(|e| AetherError::win32(ctx, "RegSetValue", format!("set_value failed: {e}")))
 }
 
 /// Writes a binary value; the input `value` parameter must be a hex string or
 /// base64-encoded.
-fn write_binary_value(params: &Value, key: &Key, name: &str) -> std::result::Result<(), AetherError> {
+fn write_binary_value(ctx: ErrorContext, params: &Value, key: &Key, name: &str) -> std::result::Result<(), AetherError> {
     let raw = params
         .get("value")
-        .ok_or_else(|| AetherError::InvalidParameter("value is required for binary writes".into()))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value is required for binary writes"))?;
 
     let bytes = if let Some(hex_str) = raw.as_str() {
         if hex_str.len() % 2 != 0 {
-            return Err(AetherError::InvalidParameter(
-                "Hex string for binary value must have even length".into(),
+            return Err(AetherError::invalid_param(ctx,
+                "Hex string for binary value must have even length",
             ));
         }
         (0..hex_str.len())
             .step_by(2)
             .map(|i| {
                 u8::from_str_radix(&hex_str[i..i + 2], 16).map_err(|_| {
-                    AetherError::InvalidParameter(format!("Invalid hex byte at position {i}"))
+                    AetherError::invalid_param(ctx.clone(), format!("Invalid hex byte at position {i}"))
                 })
             })
             .collect::<std::result::Result<Vec<u8>, _>>()?
     } else {
-        return Err(AetherError::InvalidParameter(
-            "Binary value must be a hex string".into(),
+        return Err(AetherError::invalid_param(ctx,
+            "Binary value must be a hex string",
         ));
     };
 
     key.set_bytes(name, windows_registry::Type::Bytes, &bytes)
-        .map_err(|e| AetherError::Win32Error(format!("set_value for binary failed: {e}")))
+        .map_err(|e| AetherError::win32(ctx, "RegSetValue", format!("set_value for binary failed: {e}")))
 }
 
 // ── delete ──────────────────────────────────────────────────────────────────────
@@ -395,21 +402,22 @@ fn write_binary_value(params: &Value, key: &Key, name: &str) -> std::result::Res
 /// Expected params: `hive`, `key_path`, optional `value_name`, `force` (required).
 /// If `value_name` is absent or null, the entire key tree is removed.
 fn handle_delete(params: Value) -> std::result::Result<String, AetherError> {
-    require_force(&params)?;
+    let ctx = ErrorContext::new("registry_editor", "delete");
+    require_force(ctx.clone(), &params)?;
 
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
     let value_name = get_param_str_opt(&params, "value_name");
 
-    let hkey = resolve_hive(hive)?;
+    let hkey = resolve_hive(ctx.clone(), hive)?;
     let key = hkey
         .open(key_path)
-        .map_err(|e| AetherError::not_found(format!("Registry key not found: {key_path} ({e})")))?;
+        .map_err(|e| AetherError::not_found(ctx.clone(), format!("Registry key not found: {key_path} ({e})"), None))?;
 
     if let Some(vn) = value_name {
         // Delete a single value.
         key.remove_value(vn)
-            .map_err(|e| AetherError::Win32Error(format!("Failed to delete value '{vn}': {e}")))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "RegDeleteValue", format!("Failed to delete value '{vn}': {e}")))?;
         audit::log_forced("registry", &format!("delete_value:{key_path}\\{vn}"));
         Ok(json!({
             "status": "ok",
@@ -428,7 +436,7 @@ fn handle_delete(params: Value) -> std::result::Result<String, AetherError> {
                 windows::core::PCWSTR::null(),
             );
             if result.0 != 0 {
-                return Err(AetherError::Win32Error(format!("Failed to delete key tree: error {}", result.0)));
+                return Err(AetherError::win32(ctx, "RegDeleteTree", format!("Failed to delete key tree: error {}", result.0)));
             }
         }
         audit::log_forced("registry", &format!("delete_key:{key_path}"));
@@ -449,19 +457,20 @@ fn handle_delete(params: Value) -> std::result::Result<String, AetherError> {
 /// Returns a JSON object with `subkeys` (array of strings) and `values`
 /// (array of `{name, type}` objects).
 fn handle_enumerate(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
+    let ctx = ErrorContext::new("registry_editor", "enumerate");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
 
-    let hkey = resolve_hive(hive)?;
+    let hkey = resolve_hive(ctx.clone(), hive)?;
     let key = hkey
         .open(key_path)
-        .map_err(|e| AetherError::not_found(format!("Registry key not found: {key_path} ({e})")))?;
+        .map_err(|e| AetherError::not_found(ctx, format!("Registry key not found: {key_path} ({e})"), None))?;
 
-    let subkeys: Vec<String> = key.keys().map_err(|e| AetherError::Io(e.into()))?.collect();
+    let subkeys: Vec<String> = key.keys().map_err(|e| AetherError::Io(format!("{e}")))?.collect();
 
     let values: Vec<Value> = key
         .values()
-        .map_err(|e| AetherError::Io(e.into()))?
+        .map_err(|e| AetherError::Io(format!("{e}")))?
         .map(|(name, val): (String, windows_registry::Value)| {
             json!({
                 "name": name,
@@ -488,11 +497,12 @@ fn handle_enumerate(params: Value) -> std::result::Result<String, AetherError> {
 ///
 /// Expected params: `hive`, `key_path`.
 fn handle_security_get(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
-    let win_hkey = resolve_hive_raw(hive)?;
+    let ctx = ErrorContext::new("registry_editor", "security_get");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
+    let win_hkey = resolve_hive_raw(ctx.clone(), hive)?;
 
-    let hkey = raw_open_key(win_hkey, key_path, KEY_READ)?;
+    let hkey = raw_open_key(ctx.clone(), win_hkey, key_path, KEY_READ)?;
 
     let security_info =
         OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
@@ -506,7 +516,7 @@ fn handle_security_get(params: Value) -> std::result::Result<String, AetherError
         unsafe {
             let _ = RegCloseKey(hkey);
         }
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx.clone(), "RegGetKeySecurity", format!(
             "RegGetKeySecurity size query failed for '{key_path}': error {}", ret.0
         )));
     }
@@ -525,7 +535,7 @@ fn handle_security_get(params: Value) -> std::result::Result<String, AetherError
         let _ = RegCloseKey(hkey);
     }
     if ret.0 != 0 {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx.clone(), "RegGetKeySecurity", format!(
             "RegGetKeySecurity failed for '{key_path}': error {}", ret.0
         )));
     }
@@ -542,7 +552,7 @@ fn handle_security_get(params: Value) -> std::result::Result<String, AetherError
             Some(&mut sddl_len),
         )
     }
-    .map_err(|e| AetherError::Win32Error(format!(
+    .map_err(|e| AetherError::win32(ctx.clone(), "ConvertSecurityDescriptorToStringSecurityDescriptorW", format!(
         "ConvertSecurityDescriptorToStringSecurityDescriptorW failed: {e}"
     )))?;
 
@@ -574,14 +584,15 @@ fn handle_security_get(params: Value) -> std::result::Result<String, AetherError
 /// Expected params: `hive`, `key_path`, `sddl` (security descriptor string),
 /// `force` (required).
 fn handle_security_set(params: Value) -> std::result::Result<String, AetherError> {
-    require_force(&params)?;
+    let ctx = ErrorContext::new("registry_editor", "security_set");
+    require_force(ctx.clone(), &params)?;
 
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
-    let sddl = get_param_str(&params, "sddl")?;
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
+    let sddl = get_param_str(ctx.clone(), &params, "sddl")?;
 
-    let win_hkey = resolve_hive_raw(&hive)?;
-    let hkey = raw_open_key(win_hkey, key_path, KEY_READ | KEY_WRITE)?;
+    let win_hkey = resolve_hive_raw(ctx.clone(), hive)?;
+    let hkey = raw_open_key(ctx.clone(), win_hkey, key_path, KEY_READ | KEY_WRITE)?;
 
     // Convert SDDL string to a security descriptor.
     let sddl_wide = to_wide_null(sddl);
@@ -599,7 +610,7 @@ fn handle_security_set(params: Value) -> std::result::Result<String, AetherError
         unsafe {
             let _ = RegCloseKey(hkey);
         }
-        AetherError::InvalidParameter(format!(
+        AetherError::invalid_param(ctx.clone(), format!(
             "Invalid SDDL string: {sddl}"
         ))
     })?;
@@ -613,7 +624,7 @@ fn handle_security_set(params: Value) -> std::result::Result<String, AetherError
         let _ = RegCloseKey(hkey);
     }
     if ret.0 != 0 {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "RegSetKeySecurity", format!(
             "RegSetKeySecurity failed for '{key_path}': error {}", ret.0
         )));
     }
@@ -636,12 +647,13 @@ fn handle_security_set(params: Value) -> std::result::Result<String, AetherError
 ///
 /// Expected params: `hive`, `key_path`, `watch_subtree` (optional bool, default true).
 fn handle_monitor(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
+    let ctx = ErrorContext::new("registry_editor", "monitor");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
     let watch_subtree = get_param_bool(&params, "watch_subtree");
 
-    let win_hkey = resolve_hive_raw(hive)?;
-    let hkey = raw_open_key(win_hkey, key_path, KEY_NOTIFY)?;
+    let win_hkey = resolve_hive_raw(ctx.clone(), hive)?;
+    let hkey = raw_open_key(ctx.clone(), win_hkey, key_path, KEY_NOTIFY)?;
 
     // Combine notification filters: any change to the key or its values.
     let filter = REG_NOTIFY_FILTER(
@@ -669,7 +681,7 @@ fn handle_monitor(params: Value) -> std::result::Result<String, AetherError> {
     }
 
     if ret.0 != 0 {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "RegNotifyChangeKeyValue", format!(
             "RegNotifyChangeKeyValue failed for '{key_disp}': error {}", ret.0
         )));
     }
@@ -689,19 +701,20 @@ fn handle_monitor(params: Value) -> std::result::Result<String, AetherError> {
 ///
 /// Expected params: `hive`, `key_path`, `output_path` (absolute path to .reg file).
 fn handle_export(params: Value) -> std::result::Result<String, AetherError> {
-    let hive = get_param_str(&params, "hive")?;
-    let key_path = get_param_str(&params, "key_path")?;
-    let output_path = get_param_str(&params, "output_path")?;
+    let ctx = ErrorContext::new("registry_editor", "export");
+    let hive = get_param_str(ctx.clone(), &params, "hive")?;
+    let key_path = get_param_str(ctx.clone(), &params, "key_path")?;
+    let output_path = get_param_str(ctx.clone(), &params, "output_path")?;
 
     let full_key = format!("{hive}\\{key_path}");
     let output = Command::new("reg")
         .args(["export", &full_key, output_path, "/y"])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::Io(format!("{e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "reg export", format!(
             "reg export failed for '{full_key}': {stderr}"
         )));
     }
@@ -721,18 +734,19 @@ fn handle_export(params: Value) -> std::result::Result<String, AetherError> {
 ///
 /// Expected params: `input_path` (absolute path to .reg file), `force` (required).
 fn handle_import(params: Value) -> std::result::Result<String, AetherError> {
-    require_force(&params)?;
+    let ctx = ErrorContext::new("registry_editor", "import");
+    require_force(ctx.clone(), &params)?;
 
-    let input_path = get_param_str(&params, "input_path")?;
+    let input_path = get_param_str(ctx.clone(), &params, "input_path")?;
 
     let output = Command::new("reg")
         .args(["import", input_path])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::Io(format!("{e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "reg import", format!(
             "reg import failed for '{input_path}': {stderr}"
         )));
     }
@@ -756,17 +770,19 @@ fn handle_import(params: Value) -> std::result::Result<String, AetherError> {
 /// `mount_name` (key name to mount under, e.g. `OfflineSoftware`),
 /// `target_hive` (optional, default `"HKLM"` — must be HKLM or HKU), `force` (required).
 fn handle_offline_mount(server: &AetherServer, params: Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("registry_editor", "offline_mount");
+
     server
         .gates
-        .check(server.gates.offline_registry, "AETHER_OFFLINE_REGISTRY")?;
+        .check(ctx.clone(), server.gates.offline_registry, "AETHER_OFFLINE_REGISTRY")?;
 
-    require_force(&params)?;
+    require_force(ctx.clone(), &params)?;
 
-    let hive_path = get_param_str(&params, "hive_path")?;
-    let mount_name = get_param_str(&params, "mount_name")?;
+    let hive_path = get_param_str(ctx.clone(), &params, "hive_path")?;
+    let mount_name = get_param_str(ctx.clone(), &params, "mount_name")?;
     let target_hive = get_param_str_opt(&params, "target_hive").unwrap_or("HKLM");
 
-    let win_hkey = resolve_hive_raw(target_hive)?;
+    let win_hkey = resolve_hive_raw(ctx.clone(), target_hive)?;
 
     let mount_wide = to_wide_null(mount_name);
     let path_wide = to_wide_null(hive_path);
@@ -779,7 +795,7 @@ fn handle_offline_mount(server: &AetherServer, params: Value) -> std::result::Re
         )
     };
     if ret.0 != 0 {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "RegLoadKeyW", format!(
             "RegLoadKeyW failed (hive={hive_path}, mount={mount_name}): error {}", ret.0
         )));
     }
@@ -803,22 +819,24 @@ fn handle_offline_mount(server: &AetherServer, params: Value) -> std::result::Re
 /// Expected params: `target_hive` (must be HKLM or HKU), `mount_name`,
 /// `force` (required).
 fn handle_offline_unmount(server: &AetherServer, params: Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("registry_editor", "offline_unmount");
+
     server
         .gates
-        .check(server.gates.offline_registry, "AETHER_OFFLINE_REGISTRY")?;
+        .check(ctx.clone(), server.gates.offline_registry, "AETHER_OFFLINE_REGISTRY")?;
 
-    require_force(&params)?;
+    require_force(ctx.clone(), &params)?;
 
-    let target_hive = get_param_str(&params, "target_hive")?;
-    let mount_name = get_param_str(&params, "mount_name")?;
+    let target_hive = get_param_str(ctx.clone(), &params, "target_hive")?;
+    let mount_name = get_param_str(ctx.clone(), &params, "mount_name")?;
 
-    let win_hkey = resolve_hive_raw(target_hive)?;
+    let win_hkey = resolve_hive_raw(ctx.clone(), target_hive)?;
     let mount_wide = to_wide_null(mount_name);
 
     let ret =
         unsafe { RegUnLoadKeyW(win_hkey, PCWSTR(mount_wide.as_ptr())) };
     if ret.0 != 0 {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "RegUnLoadKeyW", format!(
             "RegUnLoadKeyW failed (target={target_hive}, mount={mount_name}): error {}", ret.0
         )));
     }

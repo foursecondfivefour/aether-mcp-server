@@ -6,7 +6,7 @@
 //! Scheduled Tasks (list/query/create/delete/run/enable/disable), and WMI queries.
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use serde_json::{json, Value};
 use std::process::Command;
 use std::time::Duration;
@@ -62,11 +62,11 @@ fn ps_json(script: &str) -> std::result::Result<Value, AetherError> {
 }
 
 /// Check that `force: true` is set in params for dangerous operations.
-fn check_force(params: &Value, action: &str) -> std::result::Result<(), AetherError> {
+fn check_force(ctx: ErrorContext, params: &Value, action: &str) -> std::result::Result<(), AetherError> {
     if params.get("force").and_then(|v| v.as_bool()) != Some(true) {
-        return Err(AetherError::permission_denied(format!(
-            "Action '{action}' requires \"force\": true"
-        )));
+        return Err(AetherError::permission_denied(ctx,
+            format!("Action '{action}' requires \"force\": true")
+        ));
     }
     Ok(())
 }
@@ -140,27 +140,28 @@ fn action_event_query(params: &Value) -> std::result::Result<String, AetherError
 
 /// Write an event to the Event Log.
 fn action_event_write(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "event_write")?;
+    let ctx = ErrorContext::new("system_automation", "event_write");
+    check_force(ctx.clone(), params, "event_write")?;
 
     let log_name = params
         .get("log_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("log_name (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "log_name (string) is required"))?;
 
     let source = params
         .get("source")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("source (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "source (string) is required"))?;
 
     let event_id = params
         .get("event_id")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| AetherError::invalid_param("event_id (integer) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "event_id (integer) is required"))?;
 
     let message = params
         .get("message")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("message (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "message (string) is required"))?;
 
     let event_type = params
         .get("event_type")
@@ -172,7 +173,7 @@ fn action_event_write(params: &Value) -> std::result::Result<String, AetherError
         "warning" | "warn" => "Warning",
         "error" | "err" => "Error",
         other => {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx.clone(), format!(
                 "event_type must be info/warning/error, got: {other}"
             )))
         }
@@ -210,15 +211,16 @@ fn action_event_channels() -> std::result::Result<String, AetherError> {
 
 /// Get detailed event information by record ID.
 fn action_event_details(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "event_details");
     let log_name = params
         .get("log_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("log_name (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "log_name (string) is required"))?;
 
     let record_id = params
         .get("event_record_id")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| AetherError::invalid_param("event_record_id (integer) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "event_record_id (integer) is required"))?;
 
     let script = format!(
         "Get-WinEvent -LogName \"{log_name}\" -FilterXPath \"*[System[EventRecordID={record_id}]]\" -ErrorAction Stop | ForEach-Object {{ [xml]$xml = $_.ToXml(); @{{ id = $_.Id; level = $_.LevelDisplayName; provider = $_.ProviderName; time_created = $_.TimeCreated; machine = $_.MachineName; message = $_.Message; xml = $xml.OuterXml }} }} | ConvertTo-Json -Depth 10"
@@ -246,10 +248,11 @@ fn action_task_list() -> std::result::Result<String, AetherError> {
 
 /// Query detailed information about a specific task.
 fn action_task_query(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "task_query");
     let task_path = params
         .get("task_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_path (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_path (string) is required"))?;
 
     let escaped = ps_escape(task_path);
     let script = format!(
@@ -298,17 +301,18 @@ fn action_task_query(params: &Value) -> std::result::Result<String, AetherError>
 
 /// Create a new scheduled task via schtasks.
 fn action_task_create(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "task_create")?;
+    let ctx = ErrorContext::new("system_automation", "task_create");
+    check_force(ctx.clone(), params, "task_create")?;
 
     let task_name = params
         .get("task_name")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_name (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_name (string) is required"))?;
 
     let program = params
         .get("program")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("program (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "program (string) is required"))?;
 
     let schedule = params
         .get("schedule")
@@ -358,7 +362,7 @@ fn action_task_create(params: &Value) -> std::result::Result<String, AetherError
         "onlogon" => String::from("/sc onlogon"),
         "onidle" => String::from("/sc onidle"),
         other => {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx.clone(), format!(
                 "Unknown schedule type: {other}"
             )))
         }
@@ -393,12 +397,13 @@ fn action_task_create(params: &Value) -> std::result::Result<String, AetherError
 
 /// Delete a scheduled task.
 fn action_task_delete(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "task_delete")?;
+    let ctx = ErrorContext::new("system_automation", "task_delete");
+    check_force(ctx.clone(), params, "task_delete")?;
 
     let task_path = params
         .get("task_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_path (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_path (string) is required"))?;
 
     let _ = cmd_output("schtasks", &["/delete", "/tn", task_path, "/f"])?;
     audit::log_forced("automation", "task_delete");
@@ -413,10 +418,11 @@ fn action_task_delete(params: &Value) -> std::result::Result<String, AetherError
 
 /// Run a scheduled task immediately.
 fn action_task_run(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "task_run");
     let task_path = params
         .get("task_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_path (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_path (string) is required"))?;
 
     let output = cmd_output("schtasks", &["/run", "/tn", task_path])?;
 
@@ -431,10 +437,11 @@ fn action_task_run(params: &Value) -> std::result::Result<String, AetherError> {
 
 /// Enable a scheduled task.
 fn action_task_enable(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "task_enable");
     let task_path = params
         .get("task_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_path (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_path (string) is required"))?;
 
     let _ = cmd_output("schtasks", &["/change", "/tn", task_path, "/enable"])?;
 
@@ -448,10 +455,11 @@ fn action_task_enable(params: &Value) -> std::result::Result<String, AetherError
 
 /// Disable a scheduled task.
 fn action_task_disable(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "task_disable");
     let task_path = params
         .get("task_path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("task_path (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "task_path (string) is required"))?;
 
     let _ = cmd_output("schtasks", &["/change", "/tn", task_path, "/disable"])?;
 
@@ -476,20 +484,21 @@ fn action_task_disable(params: &Value) -> std::result::Result<String, AetherErro
 /// `Win32_System_Wmi` COM interface bindings. PowerShell is preferred here
 /// for stability and is semantically equivalent.
 fn action_wmi_query(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("system_automation", "wmi_query");
     let query = params
         .get("query")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("query (WQL string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "query (WQL string) is required"))?;
 
     let trimmed = query.trim();
     if !trimmed.to_uppercase().starts_with("SELECT") {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "Only SELECT WQL queries are supported. Non-SELECT queries are rejected.",
         ));
     }
 
     if trimmed.len() > 4096 {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "Query exceeds maximum length of 4096 characters",
         ));
     }
@@ -609,7 +618,7 @@ pub fn handle_system_automation(action: &str, params: Value) -> std::result::Res
         "task_enable" => action_task_enable(&params),
         "task_disable" => action_task_disable(&params),
         "wmi_query" => action_wmi_query(&params),
-        unknown => Err(AetherError::invalid_param(format!(
+        unknown => Err(AetherError::invalid_param(ErrorContext::new("system_automation", "unknown"), format!(
             "Unknown automation action: {unknown}"
         ))),
     };

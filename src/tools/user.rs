@@ -10,7 +10,7 @@
 #![allow(unsafe_code)]
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 
 use serde_json::{json, Value};
@@ -183,10 +183,11 @@ fn filetime_to_seconds(ft: FILETIME) -> Option<i64> {
 }
 
 /// Parse the `force` flag from JSON params.
-fn require_force(params: &Value) -> std::result::Result<(), AetherError> {
+fn require_force(ctx: ErrorContext, params: &Value) -> std::result::Result<(), AetherError> {
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force {
         return Err(AetherError::invalid_param(
+            ctx,
             "This operation requires `force: true` to confirm the destructive action.",
         ));
     }
@@ -194,11 +195,12 @@ fn require_force(params: &Value) -> std::result::Result<(), AetherError> {
 }
 
 /// Check a feature gate.
-fn check_gate(enabled: bool, gate_name: &str) -> std::result::Result<(), AetherError> {
+fn check_gate(ctx: ErrorContext, enabled: bool, gate_name: &str) -> std::result::Result<(), AetherError> {
     if !enabled {
-        return Err(AetherError::FeatureDisabled(format!(
-            "Feature gate `{gate_name}` is disabled. Enable it in .env (set {gate_name}=1)."
-        )));
+        return Err(AetherError::feature_disabled(
+            ctx,
+            gate_name,
+        ));
     }
     Ok(())
 }
@@ -270,7 +272,7 @@ pub fn handle_user_management(
         "token_impersonate" => token_impersonate(server, &params),
         "lsa_secrets_list" => lsa_secrets_list(server),
         "lsa_secret_read" => lsa_secret_read(server, &params),
-        _ => Err(AetherError::invalid_param(format!(
+        _ => Err(AetherError::invalid_param(ErrorContext::new("user_management", "unknown"), format!(
             "Unknown user action: {action}"
         ))),
     };
@@ -288,6 +290,7 @@ pub fn handle_user_management(
 // ══════════════════════════════════════════════════════════════════════════
 
 fn list_users(_server: &AetherServer) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "users");
     unsafe {
         let mut buf: *mut u8 = std::ptr::null_mut();
         let mut entries_read: u32 = 0;
@@ -306,9 +309,7 @@ fn list_users(_server: &AetherServer) -> std::result::Result<String, AetherError
 
         if status != 0 && status != ERROR_MORE_DATA.0 as u32 {
             NetApiBufferFree(Some(buf as *const c_void));
-            return Err(AetherError::win32(format!(
-                "NetUserEnum failed with error {status}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetUserEnum", format!("error {status}")));
         }
 
         if entries_read == 0 {
@@ -353,6 +354,7 @@ fn list_users(_server: &AetherServer) -> std::result::Result<String, AetherError
 // ══════════════════════════════════════════════════════════════════════════
 
 fn list_groups(_server: &AetherServer) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "groups");
     unsafe {
         let mut buf: *mut u8 = std::ptr::null_mut();
         let mut entries_read: u32 = 0;
@@ -370,9 +372,7 @@ fn list_groups(_server: &AetherServer) -> std::result::Result<String, AetherErro
 
         if status != 0 && status != ERROR_MORE_DATA.0 as u32 {
             NetApiBufferFree(Some(buf as *const c_void));
-            return Err(AetherError::win32(format!(
-                "NetLocalGroupEnum failed with error {status}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetLocalGroupEnum", format!("error {status}")));
         }
 
         if entries_read == 0 {
@@ -478,7 +478,8 @@ unsafe fn sid_to_string_impl(sid: PSID) -> String {
 // ══════════════════════════════════════════════════════════════════════════
 
 fn create_user(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "create_user");
+    require_force(ctx.clone(), params)?;
 
     let username = str_param(params, "username");
     let password = str_param(params, "password");
@@ -486,9 +487,9 @@ fn create_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
     let comment = str_param(params, "comment");
 
     if username.is_empty() || password.is_empty() {
-        return Err(AetherError::invalid_param(
-            "Both 'username' and 'password' are required.",
-        ));
+        return Err(AetherError::invalid_param(ctx.clone(),
+                "Both 'username' and 'password' are required.",
+            ));
     }
 
     let w_username = to_wide_null(&username);
@@ -517,9 +518,7 @@ fn create_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
         );
 
         if status != 0 {
-            return Err(AetherError::win32(format!(
-                "NetUserAdd failed with error {status} (parm_err={parm_err})"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetUserAdd", format!("error {status} (parm_err={parm_err})")));
         }
     }
 
@@ -537,11 +536,12 @@ fn create_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
 // ══════════════════════════════════════════════════════════════════════════
 
 fn delete_user(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "delete_user");
+    require_force(ctx.clone(), params)?;
 
     let username = str_param(params, "username");
     if username.is_empty() {
-        return Err(AetherError::invalid_param("'username' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'username' is required."));
     }
 
     let w_username = HSTRING::from(username.as_str());
@@ -549,9 +549,7 @@ fn delete_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
     unsafe {
         let status = NetUserDel(PCWSTR::null(), &w_username);
         if status != 0 {
-            return Err(AetherError::win32(format!(
-                "NetUserDel failed with error {status}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetUserDel", format!("error {status}")));
         }
     }
 
@@ -567,13 +565,14 @@ fn delete_user(_server: &AetherServer, params: &Value) -> std::result::Result<St
 // ══════════════════════════════════════════════════════════════════════════
 
 fn create_group(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "create_group");
+    require_force(ctx.clone(), params)?;
 
     let group_name = str_param(params, "group_name");
     let comment = str_param(params, "comment");
 
     if group_name.is_empty() {
-        return Err(AetherError::invalid_param("'group_name' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'group_name' is required."));
     }
 
     let w_name = to_wide_null(&group_name);
@@ -594,9 +593,7 @@ fn create_group(_server: &AetherServer, params: &Value) -> std::result::Result<S
         );
 
         if status != 0 {
-            return Err(AetherError::win32(format!(
-                "NetLocalGroupAdd failed with error {status} (parm_err={parm_err})"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetLocalGroupAdd", format!("error {status} (parm_err={parm_err})")));
         }
     }
 
@@ -613,11 +610,12 @@ fn create_group(_server: &AetherServer, params: &Value) -> std::result::Result<S
 // ══════════════════════════════════════════════════════════════════════════
 
 fn delete_group(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "delete_group");
+    require_force(ctx.clone(), params)?;
 
     let group_name = str_param(params, "group_name");
     if group_name.is_empty() {
-        return Err(AetherError::invalid_param("'group_name' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'group_name' is required."));
     }
 
     let w_name = HSTRING::from(group_name.as_str());
@@ -625,9 +623,7 @@ fn delete_group(_server: &AetherServer, params: &Value) -> std::result::Result<S
     unsafe {
         let status = NetLocalGroupDel(PCWSTR::null(), &w_name);
         if status != 0 {
-            return Err(AetherError::win32(format!(
-                "NetLocalGroupDel failed with error {status}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetLocalGroupDel", format!("error {status}")));
         }
     }
 
@@ -643,12 +639,13 @@ fn delete_group(_server: &AetherServer, params: &Value) -> std::result::Result<S
 // ══════════════════════════════════════════════════════════════════════════
 
 fn group_membership(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "group_membership");
     let sub_action = str_param(params, "action");
     let username = str_param(params, "username");
     let group_name = str_param(params, "group_name");
 
     if username.is_empty() || group_name.is_empty() {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "Both 'username' and 'group_name' are required.",
         ));
     }
@@ -677,9 +674,7 @@ fn group_membership(_server: &AetherServer, params: &Value) -> std::result::Resu
                     1,
                 );
                 if status != 0 {
-                    return Err(AetherError::win32(format!(
-                        "NetLocalGroupAddMembers failed with error {status}"
-                    )));
+                    return Err(AetherError::win32(ctx.clone(), "NetLocalGroupAddMembers", format!("error {status}")));
                 }
             }
         }
@@ -705,7 +700,7 @@ fn group_membership(_server: &AetherServer, params: &Value) -> std::result::Resu
             }
         }
         _ => {
-            return Err(AetherError::invalid_param(
+            return Err(AetherError::invalid_param(ctx.clone(),
                 "Action must be 'add' or 'remove'.",
             ));
         }
@@ -877,13 +872,14 @@ fn logon_type_name(logon_type: u32) -> &'static str {
 // ══════════════════════════════════════════════════════════════════════════
 
 fn current_user_info(_server: &AetherServer) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "current_user");
     unsafe {
         // ── Username ──────────────────────────────────────────────────────
         let mut name_buf = vec![0u16; 256];
         let mut name_len: u32 = name_buf.len() as u32;
         let result = GetUserNameW(name_buf.as_mut_ptr(), &mut name_len);
         if result == 0 {
-            return Err(AetherError::win32("GetUserNameW failed"));
+            return Err(AetherError::win32(ctx.clone(), "GetUserNameW", "GetUserNameW failed"));
         }
         let username =
             String::from_utf16_lossy(&name_buf[..name_len as usize - 1]);
@@ -905,14 +901,14 @@ fn current_user_info(_server: &AetherServer) -> std::result::Result<String, Aeth
             &mut domain_size,
             &mut sid_type,
         )
-        .map_err(|e| AetherError::win32(format!("LookupAccountNameW failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "LookupAccountNameW", format!("{e}")))?;
 
         let sid_str = sid_to_string_impl(PSID(sid_buf.as_ptr() as *mut c_void));
 
         // ── Token info (elevation + groups) ───────────────────────────────
         let mut token_handle = HANDLE::default();
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle)
-            .map_err(|e| AetherError::win32(format!("OpenProcessToken failed: {e}")))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "OpenProcessToken", format!("{e}")))?;
 
         // Elevation
         let mut elevated = false;
@@ -1085,15 +1081,14 @@ fn list_privileges(_server: &AetherServer) -> std::result::Result<String, Aether
 // ══════════════════════════════════════════════════════════════════════════
 
 fn password_policies(_server: &AetherServer) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "password_policies");
     unsafe {
         let mut buf: *mut u8 = std::ptr::null_mut();
 
         let status = NetUserModalsGet(PCWSTR::null(), 0, &mut buf);
         if status != 0 {
             NetApiBufferFree(Some(buf as *const c_void));
-            return Err(AetherError::win32(format!(
-                "NetUserModalsGet (level 0) failed with error {status}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "NetUserModalsGet", format!("error {status}")));
         }
 
         let info = &*(buf as *const USER_MODALS_INFO_0);
@@ -1281,6 +1276,7 @@ fn logon_rights(_server: &AetherServer) -> std::result::Result<String, AetherErr
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cert_store_list(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "cert_store_list");
     let store = str_param(params, "store");
     let stores: Vec<&str> = if store.is_empty() {
         vec!["MY", "CA", "ROOT"]
@@ -1296,7 +1292,7 @@ fn cert_store_list(_server: &AetherServer, params: &Value) -> std::result::Resul
         unsafe {
             let h_store = CertOpenSystemStoreW(None, PCWSTR(w_store.as_ptr()))
                 .map_err(|e| {
-                    AetherError::win32(format!("CertOpenSystemStoreW({store_name}) failed: {e}"))
+                    AetherError::win32(ctx.clone(), "CertOpenSystemStoreW", format!("({store_name}) failed: {e}"))
                 })?;
 
             let mut p_prev: *const CERT_CONTEXT = std::ptr::null();
@@ -1434,11 +1430,12 @@ unsafe fn blob_to_hex(blob: &CRYPT_INTEGER_BLOB) -> String {
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cert_info(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "cert_info");
     let store_name = str_param(params, "store_name");
     let thumbprint = str_param(params, "thumbprint");
 
     if store_name.is_empty() || thumbprint.is_empty() {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "'store_name' and 'thumbprint' are required.",
         ));
     }
@@ -1457,12 +1454,13 @@ fn cert_info(_server: &AetherServer, params: &Value) -> std::result::Result<Stri
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cert_export(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "cert_export");
     let store_name = str_param(params, "store_name");
     let thumbprint = str_param(params, "thumbprint");
     let output_path = str_param(params, "output_path");
 
     if store_name.is_empty() || thumbprint.is_empty() || output_path.is_empty() {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "'store_name', 'thumbprint', and 'output_path' are required.",
         ));
     }
@@ -1491,11 +1489,12 @@ fn cert_export(_server: &AetherServer, params: &Value) -> std::result::Result<St
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cert_import(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "cert_import");
     let cert_path = str_param(params, "cert_path");
     let store_name = str_param(params, "store_name");
 
     if cert_path.is_empty() {
-        return Err(AetherError::invalid_param("'cert_path' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'cert_path' is required."));
     }
 
     let effective_store = if store_name.is_empty() {
@@ -1521,13 +1520,14 @@ fn cert_import(_server: &AetherServer, params: &Value) -> std::result::Result<St
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cert_delete(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "cert_delete");
+    require_force(ctx.clone(), params)?;
 
     let store_name = str_param(params, "store_name");
     let thumbprint = str_param(params, "thumbprint");
 
     if store_name.is_empty() || thumbprint.is_empty() {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "'store_name' and 'thumbprint' are required.",
         ));
     }
@@ -1535,7 +1535,7 @@ fn cert_delete(_server: &AetherServer, params: &Value) -> std::result::Result<St
     unsafe {
         let w_store = to_wide_null(&store_name);
         let h_store = CertOpenSystemStoreW(None, PCWSTR(w_store.as_ptr()))
-            .map_err(|e| AetherError::win32(format!("CertOpenSystemStoreW failed: {e}")))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "CertOpenSystemStoreW", format!("{e}")))?;
 
         // Build SHA1 hash blob from thumbprint hex string
         let hash_bytes = hex_string_to_bytes(&thumbprint);
@@ -1554,13 +1554,13 @@ fn cert_delete(_server: &AetherServer, params: &Value) -> std::result::Result<St
 
         if p_found.is_null() {
             let _ = CertCloseStore(h_store, 0);
-            return Err(AetherError::not_found(format!(
+            return Err(AetherError::not_found(ctx.clone(), format!(
                 "Certificate with thumbprint {thumbprint} not found in store {store_name}"
-            )));
+            ), None));
         }
 
         CertDeleteCertificateFromStore(p_found).map_err(|e| {
-            AetherError::win32(format!("CertDeleteCertificateFromStore failed: {e}"))
+            AetherError::win32(ctx.clone(), "CertDeleteCertificateFromStore", format!("{e}"))
         })?;
 
         let _ = CertCloseStore(h_store, 0);
@@ -1593,12 +1593,13 @@ fn hex_string_to_bytes(s: &str) -> Vec<u8> {
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cred_list(_server: &AetherServer) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "cred_list");
     unsafe {
         let mut count: u32 = 0;
         let mut creds: *mut *mut CREDENTIALW = std::ptr::null_mut();
 
         CredEnumerateW(PCWSTR::null(), CRED_ENUMERATE_FLAGS::default(), &mut count, &mut creds)
-            .map_err(|e| AetherError::win32(format!("CredEnumerateW failed: {e}")))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "CredEnumerateW", format!("{e}")))?;
 
         if count == 0 || creds.is_null() {
             return Ok(serde_json::to_string_pretty(&json!([]))?);
@@ -1643,11 +1644,12 @@ fn credential_type_name(ct: CRED_TYPE) -> &'static str {
 // ══════════════════════════════════════════════════════════════════════════
 
 fn cred_read(_server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "cred_read");
+    require_force(ctx.clone(), params)?;
 
     let target_name = str_param(params, "target_name");
     if target_name.is_empty() {
-        return Err(AetherError::invalid_param("'target_name' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'target_name' is required."));
     }
 
     let w_target = HSTRING::from(target_name.as_str());
@@ -1656,12 +1658,12 @@ fn cred_read(_server: &AetherServer, params: &Value) -> std::result::Result<Stri
         let mut p_cred: *mut CREDENTIALW = std::ptr::null_mut();
 
         CredReadW(&w_target, CRED_TYPE(0), 0, &mut p_cred)
-            .map_err(|e| AetherError::win32(format!("CredReadW failed: {e}")))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "CredReadW", format!("{e}")))?;
 
         if p_cred.is_null() {
-            return Err(AetherError::not_found(format!(
+            return Err(AetherError::not_found(ctx.clone(), format!(
                 "Credential '{target_name}' not found"
-            )));
+            ), None));
         }
 
         let cred = &*p_cred;
@@ -1696,7 +1698,9 @@ fn cred_read(_server: &AetherServer, params: &Value) -> std::result::Result<Stri
 // ══════════════════════════════════════════════════════════════════════════
 
 fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "token_privileges");
     check_gate(
+        ctx.clone(),
         server.gates.token_manipulation,
         "AETHER_TOKEN_MANIPULATION",
     )?;
@@ -1708,7 +1712,7 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
         .unwrap_or(true);
 
     if privilege.is_empty() {
-        return Err(AetherError::invalid_param("'privilege' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'privilege' is required."));
     }
 
     let w_priv = to_wide_null(&privilege);
@@ -1716,9 +1720,7 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
 
     unsafe {
         LookupPrivilegeValueW(PCWSTR::null(), PCWSTR(w_priv.as_ptr()), &mut luid)
-            .map_err(|e| {
-                AetherError::win32(format!("LookupPrivilegeValueW failed: {e}"))
-            })?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "LookupPrivilegeValueW", format!("{e}")))?;
 
         let mut token_handle = HANDLE::default();
         OpenProcessToken(
@@ -1726,7 +1728,7 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
             &mut token_handle,
         )
-        .map_err(|e| AetherError::win32(format!("OpenProcessToken failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "OpenProcessToken (adj)", format!("{e}")))?;
 
         let new_attr = if enable { SE_PRIVILEGE_ENABLED } else { TOKEN_PRIVILEGES_ATTRIBUTES(0) };
 
@@ -1747,7 +1749,7 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
             None,
         )
         .map_err(|e| {
-            AetherError::win32(format!("AdjustTokenPrivileges failed: {e}"))
+            AetherError::win32(ctx.clone(), "AdjustTokenPrivileges", format!("{e}"))
         })?;
 
         let _ = CloseHandle(token_handle);
@@ -1765,18 +1767,20 @@ fn token_privileges(server: &AetherServer, params: &Value) -> std::result::Resul
 // ══════════════════════════════════════════════════════════════════════════
 
 fn token_impersonate(server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("user_management", "token_impersonate");
     check_gate(
+        ctx.clone(),
         server.gates.token_manipulation,
         "AETHER_TOKEN_MANIPULATION",
     )?;
-    require_force(params)?;
+    require_force(ctx.clone(), params)?;
 
     let username = str_param(params, "username");
     let domain = str_param(params, "domain");
     let password = str_param(params, "password");
 
     if username.is_empty() || password.is_empty() {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::invalid_param(ctx.clone(),
             "'username' and 'password' are required.",
         ));
     }
@@ -1802,11 +1806,11 @@ fn token_impersonate(server: &AetherServer, params: &Value) -> std::result::Resu
             LOGON32_PROVIDER_DEFAULT,
             &mut token_handle,
         )
-        .map_err(|e| AetherError::win32(format!("LogonUserW failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "LogonUserW", format!("{e}")))?;
 
         ImpersonateLoggedOnUser(token_handle)
             .map_err(|e| {
-                AetherError::win32(format!("ImpersonateLoggedOnUser failed: {e}"))
+                AetherError::win32(ctx.clone(), "ImpersonateLoggedOnUser", format!("{e}"))
             })?;
 
         let _ = CloseHandle(token_handle);
@@ -1826,7 +1830,8 @@ fn token_impersonate(server: &AetherServer, params: &Value) -> std::result::Resu
 // ══════════════════════════════════════════════════════════════════════════
 
 fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, AetherError> {
-    check_gate(server.gates.lsa_secrets, "AETHER_LSA_SECRETS")?;
+    let ctx = ErrorContext::new("user_management", "lsa_secrets_list");
+    check_gate(ctx.clone(), server.gates.lsa_secrets, "AETHER_LSA_SECRETS")?;
 
     // Primary approach: registry scan
     let reg_output = Command::new("reg")
@@ -1930,7 +1935,7 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
                 );
 
                 if RtlNtStatusToDosError(nt_status) != 0 {
-                    return Err(AetherError::permission_denied(
+                    return Err(AetherError::permission_denied(ctx.clone(),
                         "Cannot access LSA policy. Run as Administrator.",
                     ));
                 }
@@ -1987,12 +1992,13 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
 // ══════════════════════════════════════════════════════════════════════════
 
 fn lsa_secret_read(server: &AetherServer, params: &Value) -> std::result::Result<String, AetherError> {
-    check_gate(server.gates.lsa_secrets, "AETHER_LSA_SECRETS")?;
-    require_force(params)?;
+    let ctx = ErrorContext::new("user_management", "lsa_secret_read");
+    check_gate(ctx.clone(), server.gates.lsa_secrets, "AETHER_LSA_SECRETS")?;
+    require_force(ctx.clone(), params)?;
 
     let key_name = str_param(params, "key_name");
     if key_name.is_empty() {
-        return Err(AetherError::invalid_param("'key_name' is required."));
+        return Err(AetherError::invalid_param(ctx.clone(), "'key_name' is required."));
     }
 
     unsafe {
@@ -2008,7 +2014,7 @@ fn lsa_secret_read(server: &AetherServer, params: &Value) -> std::result::Result
 
         let win32_err = RtlNtStatusToDosError(nt_status);
         if win32_err != 0 {
-            return Err(AetherError::permission_denied(format!(
+            return Err(AetherError::permission_denied(ctx.clone(), format!(
                 "Cannot open LSA policy (error {win32_err}). Run as Administrator."
             )));
         }
@@ -2027,9 +2033,9 @@ fn lsa_secret_read(server: &AetherServer, params: &Value) -> std::result::Result
         let win32 = RtlNtStatusToDosError(s);
         if win32 != 0 {
             let _ = LsaClose(policy_handle);
-            return Err(AetherError::not_found(format!(
+            return Err(AetherError::not_found(ctx.clone(), format!(
                 "LSA secret '{key_name}' not found or not accessible (error {win32})"
-            )));
+            ), None));
         }
 
         let data_str = lsa_unicode_to_string(*private_data);

@@ -7,7 +7,7 @@
 //! Credential Guard, LSA protection, exploit protection, sandbox/Hyper-V/Hello status.
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use serde_json::{json, Value};
 use std::process::Command;
 use windows_registry::LOCAL_MACHINE;
@@ -44,11 +44,11 @@ fn ps_json(script: &str) -> std::result::Result<Value, AetherError> {
 }
 
 /// Check that `force: true` is set in params for dangerous operations.
-fn check_force(params: &Value, action: &str) -> std::result::Result<(), AetherError> {
+fn check_force(ctx: ErrorContext, params: &Value, action: &str) -> std::result::Result<(), AetherError> {
     if params.get("force").and_then(|v| v.as_bool()) != Some(true) {
-        return Err(AetherError::permission_denied(format!(
-            "Action '{action}' requires \"force\": true"
-        )));
+        return Err(AetherError::permission_denied(ctx,
+            format!("Action '{action}' requires \"force\": true")
+        ));
     }
     Ok(())
 }
@@ -144,12 +144,13 @@ fn action_audit_policies() -> std::result::Result<String, AetherError> {
 
 /// Enable or disable an audit category via `auditpol /set`.
 fn action_audit_set_policy(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "audit_set_policy")?;
+    let ctx = ErrorContext::new("security_audit", "audit_set_policy");
+    check_force(ctx.clone(), params, "audit_set_policy")?;
 
     let category = params
         .get("category")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("category (string) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "category (string) is required"))?;
 
     let enable = params.get("enable").and_then(|v| v.as_bool()).unwrap_or(true);
     let enable_str = if enable { "enable" } else { "disable" };
@@ -227,17 +228,18 @@ fn action_uac_status() -> std::result::Result<String, AetherError> {
 
 /// Set UAC consent level.
 fn action_uac_set_level(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "uac_set_level")?;
+    let ctx = ErrorContext::new("security_audit", "uac_set_level");
+    check_force(ctx.clone(), params, "uac_set_level")?;
 
     let path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
 
     let level = params
         .get("level")
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| AetherError::invalid_param("level (0-5 integer) is required"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "level (0-5 integer) is required"))?;
 
     if level > 5 {
-        return Err(AetherError::invalid_param("level must be 0-5"));
+        return Err(AetherError::invalid_param(ctx.clone(), "level must be 0-5"));
     }
 
     let level = level as u32;
@@ -298,7 +300,8 @@ fn action_defender_threats() -> std::result::Result<String, AetherError> {
 
 /// Run a Windows Defender scan.
 fn action_defender_scan(params: &Value) -> std::result::Result<String, AetherError> {
-    check_force(params, "defender_scan")?;
+    let ctx = ErrorContext::new("security_audit", "defender_scan");
+    check_force(ctx.clone(), params, "defender_scan")?;
 
     let scan_type = params
         .get("scan_type")
@@ -306,10 +309,10 @@ fn action_defender_scan(params: &Value) -> std::result::Result<String, AetherErr
         .unwrap_or("QuickScan");
     let valid = ["QuickScan", "FullScan", "CustomScan"];
     if !valid.contains(&scan_type) {
-        return Err(AetherError::invalid_param(format!(
-            "scan_type must be one of: {}",
-            valid.join(", ")
-        )));
+        return Err(AetherError::invalid_param(ctx.clone(), format!(
+                "scan_type must be one of: {}",
+                valid.join(", ")
+            )));
     }
 
     let script = format!("Start-MpScan -ScanType {scan_type} -ErrorAction Stop");
@@ -327,6 +330,7 @@ fn action_defender_scan(params: &Value) -> std::result::Result<String, AetherErr
 
 /// List, add, or remove Defender exclusions.
 fn action_defender_exclusions(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("security_audit", "defender_exclusions");
     let operation = params
         .get("operation")
         .and_then(|v| v.as_str())
@@ -347,19 +351,19 @@ fn action_defender_exclusions(params: &Value) -> std::result::Result<String, Aet
             Ok(v.to_string())
         }
         "add" => {
-            check_force(params, "defender_exclusions/add")?;
+            check_force(ctx.clone(), params, "defender_exclusions/add")?;
             let exclusion_type = params
                 .get("exclusion_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    AetherError::invalid_param(
+                    AetherError::invalid_param(ctx.clone(),
                         "exclusion_type is required: path, process, extension, or ip",
                     )
                 })?;
             let value = params
                 .get("value")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AetherError::invalid_param("value (string) is required"))?;
+                .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value (string) is required"))?;
 
             let flag = match exclusion_type {
                 "path" => "ExclusionPath",
@@ -367,7 +371,7 @@ fn action_defender_exclusions(params: &Value) -> std::result::Result<String, Aet
                 "extension" => "ExclusionExtension",
                 "ip" => "ExclusionIpAddress",
                 other => {
-                    return Err(AetherError::invalid_param(format!(
+                    return Err(AetherError::invalid_param(ctx.clone(), format!(
                         "Unknown exclusion_type: {other}"
                     )))
                 }
@@ -386,19 +390,19 @@ fn action_defender_exclusions(params: &Value) -> std::result::Result<String, Aet
             .to_string())
         }
         "remove" => {
-            check_force(params, "defender_exclusions/remove")?;
+            check_force(ctx.clone(), params, "defender_exclusions/remove")?;
             let exclusion_type = params
                 .get("exclusion_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    AetherError::invalid_param(
+                    AetherError::invalid_param(ctx.clone(),
                         "exclusion_type is required: path, process, extension, or ip",
                     )
                 })?;
             let value = params
                 .get("value")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AetherError::invalid_param("value (string) is required"))?;
+                .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value (string) is required"))?;
 
             let flag = match exclusion_type {
                 "path" => "ExclusionPath",
@@ -406,7 +410,7 @@ fn action_defender_exclusions(params: &Value) -> std::result::Result<String, Aet
                 "extension" => "ExclusionExtension",
                 "ip" => "ExclusionIpAddress",
                 other => {
-                    return Err(AetherError::invalid_param(format!(
+                    return Err(AetherError::invalid_param(ctx.clone(), format!(
                         "Unknown exclusion_type: {other}"
                     )))
                 }
@@ -427,7 +431,7 @@ fn action_defender_exclusions(params: &Value) -> std::result::Result<String, Aet
             })
             .to_string())
         }
-        other => Err(AetherError::invalid_param(format!(
+        other => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown operation: {other}. Use list, add, or remove."
         ))),
     }
@@ -860,7 +864,7 @@ pub fn handle_security_audit(action: &str, params: Value) -> std::result::Result
         "hyperv_status" => action_hyperv_status(),
         "smartscreen_status" => action_smartscreen_status(),
         "windows_hello_status" => action_windows_hello_status(),
-        unknown => Err(AetherError::invalid_param(format!(
+        unknown => Err(AetherError::invalid_param(ErrorContext::new("security_audit", "unknown"), format!(
             "Unknown security action: {unknown}"
         ))),
     };

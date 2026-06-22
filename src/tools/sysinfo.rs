@@ -6,7 +6,7 @@
 //! and crash dump configuration.
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 
 use std::mem;
@@ -36,7 +36,7 @@ const IOCTL_DISK_GET_DRIVE_GEOMETRY: u32 = 0x00070000;
 // Helper: read a registry string value
 // ---------------------------------------------------------------------------
 
-unsafe fn reg_read_string(hkey: HKEY, subkey: &str, value_name: &str) -> std::result::Result<String, AetherError> {
+unsafe fn reg_read_string(ctx: &ErrorContext, hkey: HKEY, subkey: &str, value_name: &str) -> std::result::Result<String, AetherError> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
     let mut key: HKEY = HKEY::default();
 
@@ -48,7 +48,7 @@ unsafe fn reg_read_string(hkey: HKEY, subkey: &str, value_name: &str) -> std::re
         &mut key,
     );
     if result != WIN32_ERROR(0) {
-        return Err(AetherError::win32(format!("RegOpenKeyExW failed: {result:?}")));
+        return Err(AetherError::win32(ctx.clone(), "RegOpenKeyExW", format!("{result:?}")));
     }
 
     let value_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -65,15 +65,19 @@ unsafe fn reg_read_string(hkey: HKEY, subkey: &str, value_name: &str) -> std::re
     );
     if status != WIN32_ERROR(0) && data_size == 0 {
         let _ = RegCloseKey(key);
-        return Err(AetherError::NotFound(format!(
-            "Registry value '{value_name}' not found in {subkey}"
-        )));
+        return Err(AetherError::not_found(
+            ctx.clone(),
+            format!("Registry value '{value_name}' not found in {subkey}"),
+            None,
+        ));
     }
     if data_type.0 != REG_SZ.0 && data_type.0 != REG_EXPAND_SZ.0 {
         let _ = RegCloseKey(key);
-        return Err(AetherError::win32(format!(
-            "Registry value '{value_name}' is not a string (type={})", data_type.0
-        )));
+        return Err(AetherError::win32(
+            ctx.clone(),
+            "RegQueryValueExW",
+            format!("Registry value '{value_name}' is not a string (type={})", data_type.0),
+        ));
     }
 
     let byte_count = data_size as usize;
@@ -88,7 +92,7 @@ unsafe fn reg_read_string(hkey: HKEY, subkey: &str, value_name: &str) -> std::re
     );
     if result != WIN32_ERROR(0) {
         let _ = RegCloseKey(key);
-        return Err(AetherError::win32(format!("RegQueryValueExW (data) failed: {result:?}")));
+        return Err(AetherError::win32(ctx.clone(), "RegQueryValueExW", format!("(data) {result:?}")));
     }
     let _ = RegCloseKey(key);
 
@@ -228,7 +232,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 // Action: cpu_info
 // ---------------------------------------------------------------------------
 
-unsafe fn action_cpu_info() -> std::result::Result<String, AetherError> {
+unsafe fn action_cpu_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     // GetSystemInfo
@@ -298,6 +302,7 @@ unsafe fn action_cpu_info() -> std::result::Result<String, AetherError> {
 
     // Registry: CPU name
     if let Ok(name) = reg_read_string(
+        ctx,
         HKEY_LOCAL_MACHINE,
         r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
         "ProcessorNameString",
@@ -341,12 +346,12 @@ unsafe fn action_cpu_info() -> std::result::Result<String, AetherError> {
 // Action: memory_info
 // ---------------------------------------------------------------------------
 
-unsafe fn action_memory_info() -> std::result::Result<String, AetherError> {
+unsafe fn action_memory_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut mem_ex: MEMORYSTATUSEX = mem::zeroed();
     mem_ex.dwLength = mem::size_of::<MEMORYSTATUSEX>() as u32;
 
     GlobalMemoryStatusEx(&mut mem_ex)
-        .map_err(|e| AetherError::win32(format!("GlobalMemoryStatusEx failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "GlobalMemoryStatusEx", e))?;
 
     let result = serde_json::json!({
         "total_physical": mem_ex.ullTotalPhys,
@@ -367,7 +372,7 @@ unsafe fn action_memory_info() -> std::result::Result<String, AetherError> {
 // Action: disk_info
 // ---------------------------------------------------------------------------
 
-unsafe fn action_disk_info() -> std::result::Result<String, AetherError> {
+unsafe fn action_disk_info(_ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let drives_mask = GetLogicalDrives();
     let mut volumes = Vec::new();
     let mut physical_disks = Vec::new();
@@ -520,7 +525,7 @@ unsafe fn action_disk_info() -> std::result::Result<String, AetherError> {
 // Action: os_info
 // ---------------------------------------------------------------------------
 
-unsafe fn action_os_info() -> std::result::Result<String, AetherError> {
+unsafe fn action_os_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     // RtlGetVersion via dynamic load from ntdll
@@ -541,9 +546,9 @@ unsafe fn action_os_info() -> std::result::Result<String, AetherError> {
 
     type RtlGetVersionFn = unsafe extern "system" fn(*mut OsVersionInfoExW) -> i32;
     let ntdll = GetModuleHandleW(w!("ntdll.dll"))
-        .map_err(|e| AetherError::win32(e))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "GetModuleHandleW", e))?;
     let proc_addr = GetProcAddress(ntdll, s!("RtlGetVersion"))
-        .ok_or_else(|| AetherError::win32("RtlGetVersion not found"))?;
+        .ok_or_else(|| AetherError::win32(ctx.clone(), "GetProcAddress", "RtlGetVersion not found"))?;
     let rtl_get_version: RtlGetVersionFn = mem::transmute(proc_addr);
 
     let mut os_vi: OsVersionInfoExW = mem::zeroed();
@@ -572,13 +577,13 @@ unsafe fn action_os_info() -> std::result::Result<String, AetherError> {
         ("InstallDate", "install_date"),
         ("RegisteredOwner", "registered_owner"),
     ] {
-        if let Ok(val) = reg_read_string(HKEY_LOCAL_MACHINE, nt_current, reg_name) {
+        if let Ok(val) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, nt_current, reg_name) {
             result.insert(json_key.to_string(), serde_json::Value::String(val.trim().into()));
         }
     }
 
     // BuildLab
-    if let Ok(val) = reg_read_string(HKEY_LOCAL_MACHINE, nt_current, "BuildLab") {
+    if let Ok(val) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, nt_current, "BuildLab") {
         result.insert("build_lab".into(), serde_json::Value::String(val.trim().into()));
     }
 
@@ -617,7 +622,7 @@ fn action_uptime() -> std::result::Result<String, AetherError> {
 // Action: env_vars
 // ---------------------------------------------------------------------------
 
-unsafe fn action_env_vars(params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+unsafe fn action_env_vars(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let sub_action = params.get("action").and_then(|v| v.as_str()).unwrap_or("list");
 
     match sub_action {
@@ -646,30 +651,30 @@ unsafe fn action_env_vars(params: &serde_json::Value) -> std::result::Result<Str
             let name = params
                 .get("name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AetherError::invalid_param("name is required for env get"))?;
+                .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "name is required for env get"))?;
             match std::env::var(name) {
                 Ok(val) => {
                     let result = serde_json::json!({ "name": name, "value": val });
                     Ok(serde_json::to_string_pretty(&result)?)
                 }
-                Err(_) => Err(AetherError::not_found(format!("Environment variable '{name}' not found"))),
+                Err(_) => Err(AetherError::not_found(ctx.clone(), format!("Environment variable '{name}' not found"), None)),
             }
         }
         "set" => {
             let name = params
                 .get("name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AetherError::invalid_param("name is required for env set"))?;
+                .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "name is required for env set"))?;
             let value = params
                 .get("value")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AetherError::invalid_param("value is required for env set"))?;
+                .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value is required for env set"))?;
             std::env::set_var(name, value);
             audit::log_forced("sysinfo", "env_vars/set");
             let result = serde_json::json!({ "name": name, "value": value, "status": "set" });
             Ok(serde_json::to_string_pretty(&result)?)
         }
-        _ => Err(AetherError::invalid_param(format!(
+        _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown env action: {sub_action}. Use list, get, or set."
         ))),
     }
@@ -679,7 +684,7 @@ unsafe fn action_env_vars(params: &serde_json::Value) -> std::result::Result<Str
 // Action: power_plans
 // ---------------------------------------------------------------------------
 
-unsafe fn action_power_plans() -> std::result::Result<String, AetherError> {
+unsafe fn action_power_plans(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut plans = Vec::new();
 
     // Try PowerEnumerate
@@ -697,7 +702,7 @@ unsafe fn action_power_plans() -> std::result::Result<String, AetherError> {
 
     // If PowerEnumerate doesn't work, fallback to powercfg
     if idx_result.is_err() || buf_size == 0 {
-        return action_power_plans_fallback();
+        return action_power_plans_fallback(ctx);
     }
 
     // Enumerate schemes
@@ -734,7 +739,7 @@ unsafe fn action_power_plans() -> std::result::Result<String, AetherError> {
             .trim_matches('\0')
             .to_string();
 
-        let name = power_read_scheme_name(&guid_str).unwrap_or_else(|| guid_str.clone());
+        let name = power_read_scheme_name(ctx, &guid_str).unwrap_or_else(|| guid_str.clone());
         plans.push((name, guid_str));
     }
 
@@ -766,18 +771,18 @@ unsafe fn action_power_plans() -> std::result::Result<String, AetherError> {
     Ok(output)
 }
 
-unsafe fn power_read_scheme_name(guid: &str) -> Option<String> {
+unsafe fn power_read_scheme_name(ctx: &ErrorContext, guid: &str) -> Option<String> {
     let subkey = format!(
         r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{guid}"
     );
-    reg_read_string(HKEY_LOCAL_MACHINE, &subkey, "FriendlyName").ok()
+    reg_read_string(ctx, HKEY_LOCAL_MACHINE, &subkey, "FriendlyName").ok()
 }
 
-fn action_power_plans_fallback() -> std::result::Result<String, AetherError> {
+fn action_power_plans_fallback(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let output = std::process::Command::new("powercfg")
         .args(["/list"])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "powercfg /list", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut plans = Vec::new();
@@ -833,10 +838,11 @@ fn action_power_plans_fallback() -> std::result::Result<String, AetherError> {
 // Action: power_set_plan
 // ---------------------------------------------------------------------------
 
-unsafe fn action_power_set_plan(params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+unsafe fn action_power_set_plan(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force {
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "power_set_plan requires force: true for safety",
         ));
     }
@@ -844,12 +850,12 @@ unsafe fn action_power_set_plan(params: &serde_json::Value) -> std::result::Resu
     let guid_str = params
         .get("guid")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("guid is required for power_set_plan"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "guid is required for power_set_plan"))?;
 
     let guid_wide = to_wide(guid_str);
     let result = PowerSetActiveScheme(HKEY::default(), Some(&guid_wide as *const _ as *const windows::core::GUID));
     if result != WIN32_ERROR(0) {
-        return Err(AetherError::win32(format!("PowerSetActiveScheme failed: {result:?}")));
+        return Err(AetherError::win32(ctx.clone(), "PowerSetActiveScheme", format!("{result:?}")));
     }
 
     audit::log_forced("sysinfo", "power_set_plan");
@@ -865,7 +871,7 @@ unsafe fn action_power_set_plan(params: &serde_json::Value) -> std::result::Resu
 // Action: power_query
 // ---------------------------------------------------------------------------
 
-unsafe fn action_power_query() -> std::result::Result<String, AetherError> {
+unsafe fn action_power_query(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     let power_policy_key =
@@ -881,7 +887,7 @@ unsafe fn action_power_query() -> std::result::Result<String, AetherError> {
 
     for (guid, label) in &sub_groups {
         let subkey = format!("{power_policy_key}\\{guid}");
-        if let Ok(default_key) = reg_read_string(HKEY_LOCAL_MACHINE, &format!("{subkey}\\DefaultPowerSchemeValues"), "AcSettingIndex") {
+        if let Ok(default_key) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, &format!("{subkey}\\DefaultPowerSchemeValues"), "AcSettingIndex") {
             let num: u32 = default_key.trim().parse().unwrap_or(0);
             let display = if *guid == "238C9FA8-0AAD-41ED-83F4-97BE242C8F20" {
                 format!("{} seconds", num)
@@ -896,7 +902,7 @@ unsafe fn action_power_query() -> std::result::Result<String, AetherError> {
         let output = std::process::Command::new("powercfg")
             .args(["/query"])
             .output()
-            .map_err(|e| AetherError::Io(e))?;
+            .map_err(|e| AetherError::io_error(ctx.clone(), "powercfg /query", e))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         result.insert("raw".into(), serde_json::Value::String(stdout.into_owned()));
     }
@@ -910,10 +916,10 @@ unsafe fn action_power_query() -> std::result::Result<String, AetherError> {
 // Action: battery
 // ---------------------------------------------------------------------------
 
-unsafe fn action_battery() -> std::result::Result<String, AetherError> {
+unsafe fn action_battery(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut sps: SYSTEM_POWER_STATUS = mem::zeroed();
     GetSystemPowerStatus(&mut sps)
-        .map_err(|e| AetherError::win32(format!("GetSystemPowerStatus failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "GetSystemPowerStatus", e))?;
 
     let ac_line = match sps.ACLineStatus {
         0 => "Offline",
@@ -974,7 +980,7 @@ unsafe fn action_battery() -> std::result::Result<String, AetherError> {
 // Action: device_list
 // ---------------------------------------------------------------------------
 
-unsafe fn action_device_list() -> std::result::Result<String, AetherError> {
+unsafe fn action_device_list(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let class_guid = windows::core::GUID::zeroed();
     let dev_info = match SetupDiGetClassDevsW(
         Some(&class_guid),
@@ -983,7 +989,7 @@ unsafe fn action_device_list() -> std::result::Result<String, AetherError> {
         DIGCF_ALLCLASSES,
     ) {
         Ok(h) if !h.is_invalid() => h,
-        _ => return Err(AetherError::win32("SetupDiGetClassDevsW failed")),
+        _ => return Err(AetherError::win32(ctx.clone(), "SetupDiGetClassDevsW", "failed")),
     };
 
     let mut devices = Vec::new();
@@ -1091,12 +1097,12 @@ unsafe fn action_device_list() -> std::result::Result<String, AetherError> {
 // Action: driver_list
 // ---------------------------------------------------------------------------
 
-fn action_driver_list() -> Result<String, AetherError> {
+fn action_driver_list(ctx: &ErrorContext) -> Result<String, AetherError> {
     // Use sc query to list drivers (avoids complex EnumServicesStatusExW API)
     let output = std::process::Command::new("sc")
         .args(["query", "type=", "driver"])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "sc query drivers", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut drivers = Vec::new();
@@ -1144,7 +1150,7 @@ fn action_driver_list() -> Result<String, AetherError> {
 // Action: bios_info
 // ---------------------------------------------------------------------------
 
-unsafe fn action_bios_info() -> std::result::Result<String, AetherError> {
+unsafe fn action_bios_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let bios_key = r"HARDWARE\DESCRIPTION\System\BIOS";
     let mut result = serde_json::Map::new();
 
@@ -1162,7 +1168,7 @@ unsafe fn action_bios_info() -> std::result::Result<String, AetherError> {
     ];
 
     for (reg_name, json_key) in &fields {
-        if let Ok(val) = reg_read_string(HKEY_LOCAL_MACHINE, bios_key, reg_name) {
+        if let Ok(val) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, bios_key, reg_name) {
             result.insert(json_key.to_string(), serde_json::Value::String(val.trim().into()));
         }
     }
@@ -1258,10 +1264,11 @@ fn is_leap(year: i64) -> bool {
 // Action: time_set
 // ---------------------------------------------------------------------------
 
-fn action_time_set(params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+fn action_time_set(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force {
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "time_set requires force: true for safety",
         ));
     }
@@ -1274,7 +1281,7 @@ fn action_time_set(params: &serde_json::Value) -> std::result::Result<String, Ae
     let second = params.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
 
     if year < 2020 || month < 1 || month > 12 || day < 1 || day > 31 {
-        return Err(AetherError::invalid_param("Invalid date/time values"));
+        return Err(AetherError::invalid_param(ctx.clone(), "Invalid date/time values"));
     }
 
     // Use PowerShell as fallback (SetLocalTime requires SE_SYSTEMTIME_NAME privilege)
@@ -1286,11 +1293,11 @@ fn action_time_set(params: &serde_json::Value) -> std::result::Result<String, Ae
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &cmd])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "Set-Date", e))?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::win32(format!("Set-Date failed: {}", err.trim())));
+        return Err(AetherError::win32(ctx.clone(), "Set-Date", format!("{}", err.trim())));
     }
 
     let result = serde_json::json!({
@@ -1304,11 +1311,11 @@ fn action_time_set(params: &serde_json::Value) -> std::result::Result<String, Ae
 // Action: ntp_sync
 // ---------------------------------------------------------------------------
 
-fn action_ntp_sync() -> std::result::Result<String, AetherError> {
+fn action_ntp_sync(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let output = std::process::Command::new("w32tm")
         .args(["/resync"])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "w32tm /resync", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1334,7 +1341,7 @@ fn action_ntp_sync() -> std::result::Result<String, AetherError> {
 // Action: installed_software
 // ---------------------------------------------------------------------------
 
-unsafe fn action_installed_software() -> std::result::Result<String, AetherError> {
+unsafe fn action_installed_software(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut software = Vec::new();
 
     let uninstall_paths = [
@@ -1362,7 +1369,7 @@ unsafe fn action_installed_software() -> std::result::Result<String, AetherError
             let mut entry = serde_json::Map::new();
 
             for (reg_name, json_key) in &fields {
-                if let Ok(val) = reg_read_string(*hkey, &full_path, reg_name) {
+                if let Ok(val) = reg_read_string(ctx, *hkey, &full_path, reg_name) {
                     let val = val.trim().to_string();
                     if !val.is_empty() {
                         entry.insert(json_key.to_string(), serde_json::Value::String(val));
@@ -1401,10 +1408,13 @@ fn action_windows_update() -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     let wu_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate";
+    // reg_read_all_values_to_json doesn't need ctx since it never errors
+    let ctx_unused = ErrorContext::new("system_info", "windows_update");
     unsafe {
         if let Ok(settings) = reg_read_all_values_to_json(HKEY_LOCAL_MACHINE, wu_key) {
             result.insert("settings".into(), settings);
         }
+        let _ = ctx_unused; // suppress unused warning
     }
 
     let qfe = std::process::Command::new("wmic")
@@ -1546,7 +1556,7 @@ unsafe fn action_startup_programs() -> std::result::Result<String, AetherError> 
 // Action: restore_points
 // ---------------------------------------------------------------------------
 
-fn action_restore_points(params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let action = params.get("action").and_then(|v| v.as_str()).unwrap_or("list");
 
     match action {
@@ -1558,7 +1568,7 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
                     "Get-ComputerRestorePoint | Select-Object SequenceNumber,Description,CreationTime,RestorePointType | ConvertTo-Json",
                 ])
                 .output()
-                .map_err(|e| AetherError::Io(e))?;
+                .map_err(|e| AetherError::io_error(ctx.clone(), "Get-ComputerRestorePoint", e))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -1566,7 +1576,7 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
                 let vss = std::process::Command::new("vssadmin")
                     .args(["list", "shadows"])
                     .output()
-                    .map_err(|e| AetherError::Io(e))?;
+                    .map_err(|e| AetherError::io_error(ctx.clone(), "vssadmin list shadows", e))?;
                 let vss_out = String::from_utf8_lossy(&vss.stdout);
                 return Ok(serde_json::json!({
                     "restore_points": vss_out.trim(),
@@ -1587,6 +1597,7 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
             let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
             if !force {
                 return Err(AetherError::invalid_param(
+                    ctx.clone(),
                     "restore_points create requires force: true for safety",
                 ));
             }
@@ -1602,7 +1613,7 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
                     &format!("Checkpoint-Computer -Description \"{description}\" -RestorePointType MODIFY_SETTINGS"),
                 ])
                 .output()
-                .map_err(|e| AetherError::Io(e))?;
+                .map_err(|e| AetherError::io_error(ctx.clone(), "Checkpoint-Computer", e))?;
 
             if output.status.success() {
                 audit::log_forced("sysinfo", "restore_points/create");
@@ -1613,13 +1624,10 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
                 .to_string())
             } else {
                 let err = String::from_utf8_lossy(&output.stderr);
-                Err(AetherError::win32(format!(
-                    "Failed to create restore point: {}",
-                    err.trim()
-                )))
+                Err(AetherError::win32(ctx.clone(), "Checkpoint-Computer", format!("{}", err.trim())))
             }
         }
-        _ => Err(AetherError::invalid_param(format!(
+        _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown restore_points action: {action}. Use list or create."
         ))),
     }
@@ -1629,7 +1637,7 @@ fn action_restore_points(params: &serde_json::Value) -> std::result::Result<Stri
 // Action: perf_counters
 // ---------------------------------------------------------------------------
 
-unsafe fn action_perf_counters() -> std::result::Result<String, AetherError> {
+unsafe fn action_perf_counters(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     let mut idle: FILETIME = mem::zeroed();
@@ -1660,7 +1668,7 @@ unsafe fn action_perf_counters() -> std::result::Result<String, AetherError> {
     }
 
     let perf_lib = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\009";
-    if let Ok(counter_index) = reg_read_string(HKEY_LOCAL_MACHINE, perf_lib, "Counter") {
+    if let Ok(counter_index) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, perf_lib, "Counter") {
         result.insert("available_counters".into(), serde_json::Value::String(counter_index));
     }
 
@@ -1673,19 +1681,15 @@ unsafe fn action_perf_counters() -> std::result::Result<String, AetherError> {
 // Action: bcd_list
 // ---------------------------------------------------------------------------
 
-fn action_bcd_list(server: &AetherServer) -> std::result::Result<String, AetherError> {
+fn action_bcd_list(server: &AetherServer, ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     server
         .gates
-        .check(server.gates.bcd_edit, "AETHER_BCD_EDIT")
-        .map_err(|e| {
-            audit::log_security("sysinfo", "bcd_list", &e.to_string());
-            e
-        })?;
+        .check(ctx.clone(), server.gates.bcd_edit, "AETHER_BCD_EDIT")?;
 
     let output = std::process::Command::new("bcdedit")
         .args(["/enum"])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /enum", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut entries = Vec::new();
@@ -1738,33 +1742,26 @@ fn action_bcd_list(server: &AetherServer) -> std::result::Result<String, AetherE
 // Action: bcd_get_entry / bcd_set_entry
 // ---------------------------------------------------------------------------
 
-fn action_bcd_get_entry(server: &AetherServer, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+fn action_bcd_get_entry(server: &AetherServer, ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     server
         .gates
-        .check(server.gates.bcd_edit, "AETHER_BCD_EDIT")
-        .map_err(|e| {
-            audit::log_security("sysinfo", "bcd_get_entry", &e.to_string());
-            e
-        })?;
+        .check(ctx.clone(), server.gates.bcd_edit, "AETHER_BCD_EDIT")?;
 
     let id = params
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("id is required for bcd_get_entry"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "id is required for bcd_get_entry"))?;
 
     let output = std::process::Command::new("bcdedit")
         .args(["/enum", id])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /enum", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        return Err(AetherError::win32(format!(
-            "bcdedit failed: {}",
-            stderr.trim()
-        )));
+        return Err(AetherError::win32(ctx.clone(), "bcdedit", format!("{}", stderr.trim())));
     }
 
     let result = serde_json::json!({
@@ -1776,18 +1773,15 @@ fn action_bcd_get_entry(server: &AetherServer, params: &serde_json::Value) -> st
     Ok(output_str)
 }
 
-fn action_bcd_set_entry(server: &AetherServer, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+fn action_bcd_set_entry(server: &AetherServer, ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     server
         .gates
-        .check(server.gates.bcd_edit, "AETHER_BCD_EDIT")
-        .map_err(|e| {
-            audit::log_security("sysinfo", "bcd_set_entry", &e.to_string());
-            e
-        })?;
+        .check(ctx.clone(), server.gates.bcd_edit, "AETHER_BCD_EDIT")?;
 
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force {
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "bcd_set_entry requires force: true for safety",
         ));
     }
@@ -1795,29 +1789,26 @@ fn action_bcd_set_entry(server: &AetherServer, params: &serde_json::Value) -> st
     let id = params
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("id is required for bcd_set_entry"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "id is required for bcd_set_entry"))?;
     let key = params
         .get("key")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("key is required for bcd_set_entry"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "key is required for bcd_set_entry"))?;
     let value = params
         .get("value")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("value is required for bcd_set_entry"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value is required for bcd_set_entry"))?;
 
     let output = std::process::Command::new("bcdedit")
         .args(["/set", id, key, value])
         .output()
-        .map_err(|e| AetherError::Io(e))?;
+        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /set", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        return Err(AetherError::win32(format!(
-            "bcdedit /set failed: {}",
-            stderr.trim()
-        )));
+        return Err(AetherError::win32(ctx.clone(), "bcdedit /set", format!("{}", stderr.trim())));
     }
 
     audit::log_forced("sysinfo", "bcd_set_entry");
@@ -1838,14 +1829,10 @@ fn action_bcd_set_entry(server: &AetherServer, params: &serde_json::Value) -> st
 // Action: crashdump_info / crashdump_configure
 // ---------------------------------------------------------------------------
 
-fn action_crashdump_info(server: &AetherServer) -> std::result::Result<String, AetherError> {
+fn action_crashdump_info(server: &AetherServer, ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     server
         .gates
-        .check(server.gates.hal_config, "AETHER_HAL_CONFIG")
-        .map_err(|e| {
-            audit::log_security("sysinfo", "crashdump_info", &e.to_string());
-            e
-        })?;
+        .check(ctx.clone(), server.gates.hal_config, "AETHER_HAL_CONFIG")?;
 
     let crash_key = r"SYSTEM\CurrentControlSet\Control\CrashControl";
     let mut result = serde_json::Map::new();
@@ -1862,7 +1849,7 @@ fn action_crashdump_info(server: &AetherServer) -> std::result::Result<String, A
 
     for (reg_name, json_key) in &fields {
         unsafe {
-            if let Ok(val) = reg_read_string(HKEY_LOCAL_MACHINE, crash_key, reg_name) {
+            if let Ok(val) = reg_read_string(ctx, HKEY_LOCAL_MACHINE, crash_key, reg_name) {
                 let val = val.trim();
                 if let Ok(n) = val.parse::<u32>() {
                     let display = match *reg_name {
@@ -1895,18 +1882,15 @@ fn action_crashdump_info(server: &AetherServer) -> std::result::Result<String, A
     Ok(output)
 }
 
-fn action_crashdump_configure(server: &AetherServer, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
+fn action_crashdump_configure(server: &AetherServer, ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     server
         .gates
-        .check(server.gates.hal_config, "AETHER_HAL_CONFIG")
-        .map_err(|e| {
-            audit::log_security("sysinfo", "crashdump_configure", &e.to_string());
-            e
-        })?;
+        .check(ctx.clone(), server.gates.hal_config, "AETHER_HAL_CONFIG")?;
 
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force {
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "crashdump_configure requires force: true for safety",
         ));
     }
@@ -1943,7 +1927,7 @@ fn action_crashdump_configure(server: &AetherServer, params: &serde_json::Value)
                     &mut key,
                 );
                 if result != WIN32_ERROR(0) {
-                    return Err(AetherError::win32(format!("Cannot open CrashControl key: {result:?}")));
+                    return Err(AetherError::win32(ctx.clone(), "RegOpenKeyExW", format!("CrashControl: {result:?}")));
                 }
 
                 let value_wide = to_wide(reg_name);
@@ -1961,7 +1945,7 @@ fn action_crashdump_configure(server: &AetherServer, params: &serde_json::Value)
                 );
                 if set_result != WIN32_ERROR(0) {
                     let _ = RegCloseKey(key);
-                    return Err(AetherError::win32(format!("Failed to set {reg_name}: {set_result:?}")));
+                    return Err(AetherError::win32(ctx.clone(), "RegSetValueExW", format!("{reg_name}: {set_result:?}")));
                 }
                 let _ = RegCloseKey(key);
                 changes.push(format!("{reg_name} = {value_str}"));
@@ -1996,34 +1980,36 @@ pub fn handle_system_info(
     action: &str,
     params: serde_json::Value,
 ) -> std::result::Result<String, AetherError> {
+    let action_static: &'static str = Box::leak(action.to_string().into_boxed_str());
+    let ctx = ErrorContext::new("system_info", action_static);
     match action {
-        "cpu_info" => unsafe { action_cpu_info() },
-        "memory_info" => unsafe { action_memory_info() },
-        "disk_info" => unsafe { action_disk_info() },
-        "os_info" => unsafe { action_os_info() },
+        "cpu_info" => unsafe { action_cpu_info(&ctx) },
+        "memory_info" => unsafe { action_memory_info(&ctx) },
+        "disk_info" => unsafe { action_disk_info(&ctx) },
+        "os_info" => unsafe { action_os_info(&ctx) },
         "uptime" => action_uptime(),
-        "env_vars" => unsafe { action_env_vars(&params) },
-        "power_plans" => unsafe { action_power_plans() },
-        "power_set_plan" => unsafe { action_power_set_plan(&params) },
-        "power_query" => unsafe { action_power_query() },
-        "battery" => unsafe { action_battery() },
-        "device_list" => unsafe { action_device_list() },
-        "driver_list" => action_driver_list(),
-        "bios_info" => unsafe { action_bios_info() },
+        "env_vars" => unsafe { action_env_vars(&ctx, &params) },
+        "power_plans" => unsafe { action_power_plans(&ctx) },
+        "power_set_plan" => unsafe { action_power_set_plan(&ctx, &params) },
+        "power_query" => unsafe { action_power_query(&ctx) },
+        "battery" => unsafe { action_battery(&ctx) },
+        "device_list" => unsafe { action_device_list(&ctx) },
+        "driver_list" => action_driver_list(&ctx),
+        "bios_info" => unsafe { action_bios_info(&ctx) },
         "time_get" => action_time_get(),
-        "time_set" => action_time_set(&params),
-        "ntp_sync" => action_ntp_sync(),
-        "installed_software" => unsafe { action_installed_software() },
+        "time_set" => action_time_set(&ctx, &params),
+        "ntp_sync" => action_ntp_sync(&ctx),
+        "installed_software" => unsafe { action_installed_software(&ctx) },
         "windows_update" => action_windows_update(),
         "startup_programs" => unsafe { action_startup_programs() },
-        "restore_points" => action_restore_points(&params),
-        "perf_counters" => unsafe { action_perf_counters() },
-        "bcd_list" => action_bcd_list(server),
-        "bcd_get_entry" => action_bcd_get_entry(server, &params),
-        "bcd_set_entry" => action_bcd_set_entry(server, &params),
-        "crashdump_info" => action_crashdump_info(server),
-        "crashdump_configure" => action_crashdump_configure(server, &params),
-        _ => Err(AetherError::invalid_param(format!(
+        "restore_points" => action_restore_points(&ctx, &params),
+        "perf_counters" => unsafe { action_perf_counters(&ctx) },
+        "bcd_list" => action_bcd_list(server, &ctx),
+        "bcd_get_entry" => action_bcd_get_entry(server, &ctx, &params),
+        "bcd_set_entry" => action_bcd_set_entry(server, &ctx, &params),
+        "crashdump_info" => action_crashdump_info(server, &ctx),
+        "crashdump_configure" => action_crashdump_configure(server, &ctx, &params),
+        _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown sysinfo action: {action}"
         ))),
     }

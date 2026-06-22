@@ -1,7 +1,6 @@
 ---
-description: AETHER_01 — Windows MCP Server development rules for Cursor
-globs: "**/*.rs,**/*.toml,AGENTS.md,SECURITY.md,README.md"
-version: 1.0.0
+description: 
+globs: **/*.rs, **/*.toml, AGENTS.md, SECURITY.md, README.md
 alwaysApply: false
 ---
 
@@ -19,7 +18,7 @@ alwaysApply: false
 ## Stack
 
 | Dependency | Version | Purpose |
-|-----------|---------|---------|
+|-----|---|---|
 | `rmcp` | 0.5 | Official MCP Rust SDK |
 | `windows` | 0.58 | Win32 API bindings (50+ features) |
 | `windows-registry` | 0.3 | High-level registry access |

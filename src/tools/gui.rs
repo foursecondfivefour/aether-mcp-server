@@ -10,7 +10,7 @@
 #![allow(unsafe_code)]
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -59,31 +59,33 @@ const TOOL: &str = "gui";
 /// Returns `AetherError::NotFound` when a requested window cannot be located.
 #[must_use]
 pub fn handle_gui_automation(action: &str, params: serde_json::Value) -> std::result::Result<String, AetherError> {
+    let action_static: &'static str = Box::leak(action.to_string().into_boxed_str());
+    let ctx = ErrorContext::new("gui_automation", action_static);
     match action {
-        "mouse_move" => mouse_move(&params),
-        "mouse_click" => mouse_click(&params),
-        "mouse_scroll" => mouse_scroll(&params),
-        "mouse_position" => mouse_position(),
-        "keyboard_type" => keyboard_type(&params),
-        "keyboard_press" => keyboard_press(&params),
+        "mouse_move" => mouse_move(&ctx, &params),
+        "mouse_click" => mouse_click(&ctx, &params),
+        "mouse_scroll" => mouse_scroll(&ctx, &params),
+        "mouse_position" => mouse_position(&ctx),
+        "keyboard_type" => keyboard_type(&ctx, &params),
+        "keyboard_press" => keyboard_press(&ctx, &params),
         "keyboard_state" => keyboard_state(),
-        "find_window" => find_window(&params),
-        "list_windows" => list_windows(),
-        "set_window_pos" => set_window_pos(&params),
-        "focus_window" => focus_window(&params),
-        "get_window_rect" => get_window_rect(&params),
-        "get_window_text" => get_window_text(&params),
-        "close_window" => close_window(&params),
-        "screenshot" => screenshot(&params),
-        "clipboard_read" => clipboard_read(),
-        "clipboard_write" => clipboard_write(&params),
-        "display_info" => display_info(),
-        "set_resolution" => set_resolution(&params),
-        "audio_volume" => audio_volume(&params),
-        "audio_mute" => audio_mute(&params),
-        "screen_lock" => screen_lock(),
-        "input_locale" => input_locale(&params),
-        other => Err(AetherError::invalid_param(format!(
+        "find_window" => find_window(&ctx, &params),
+        "list_windows" => list_windows(&ctx),
+        "set_window_pos" => set_window_pos(&ctx, &params),
+        "focus_window" => focus_window(&ctx, &params),
+        "get_window_rect" => get_window_rect(&ctx, &params),
+        "get_window_text" => get_window_text(&ctx, &params),
+        "close_window" => close_window(&ctx, &params),
+        "screenshot" => screenshot(&ctx, &params),
+        "clipboard_read" => clipboard_read(&ctx),
+        "clipboard_write" => clipboard_write(&ctx, &params),
+        "display_info" => display_info(&ctx),
+        "set_resolution" => set_resolution(&ctx, &params),
+        "audio_volume" => audio_volume(&ctx, &params),
+        "audio_mute" => audio_mute(&ctx, &params),
+        "screen_lock" => screen_lock(&ctx),
+        "input_locale" => input_locale(&ctx, &params),
+        other => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown GUI action: {other}"
         ))),
     }
@@ -93,21 +95,21 @@ pub fn handle_gui_automation(action: &str, params: serde_json::Value) -> std::re
 // 1. mouse_move — move cursor (absolute or relative)
 // ===========================================================================
 
-fn mouse_move(params: &Value) -> std::result::Result<String, AetherError> {
+fn mouse_move(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     if let (Some(x), Some(y)) = (params["x"].as_i64(), params["y"].as_i64()) {
         unsafe { SetCursorPos(x as i32, y as i32) }
-            .map_err(|e| AetherError::win32(e))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "SetCursorPos", e))?;
         audit::log_success(TOOL, "mouse_move", &format!("absolute x={x} y={y}"));
         return Ok(json!({"success": true, "x": x, "y": y}).to_string());
     }
 
     if let (Some(dx), Some(dy)) = (params["dx"].as_i64(), params["dy"].as_i64()) {
         let mut pt = POINT::default();
-        unsafe { GetCursorPos(&mut pt) }.map_err(|e| AetherError::win32(e))?;
+        unsafe { GetCursorPos(&mut pt) }.map_err(|e| AetherError::win32(ctx.clone(), "GetCursorPos", e))?;
         let new_x = pt.x + dx as i32;
         let new_y = pt.y + dy as i32;
         unsafe { SetCursorPos(new_x, new_y) }
-            .map_err(|e| AetherError::win32(e))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "SetCursorPos", e))?;
         audit::log_success(
             TOOL,
             "mouse_move",
@@ -118,6 +120,7 @@ fn mouse_move(params: &Value) -> std::result::Result<String, AetherError> {
 
     audit::log_failure(TOOL, "mouse_move", "missing x/y or dx/dy");
     Err(AetherError::invalid_param(
+        ctx.clone(),
         "mouse_move requires x/y (absolute) or dx/dy (relative)",
     ))
 }
@@ -126,39 +129,39 @@ fn mouse_move(params: &Value) -> std::result::Result<String, AetherError> {
 // 2. mouse_click — click with SendInput
 // ===========================================================================
 
-fn mouse_click(params: &Value) -> std::result::Result<String, AetherError> {
+fn mouse_click(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let button = params["button"].as_str().unwrap_or("left");
     let click_type = params["type"].as_str().unwrap_or("single");
 
-    let (down_flag, up_flag, extra_data) = button_flags(button)?;
+    let (down_flag, up_flag, extra_data) = button_flags(ctx, button)?;
 
     match click_type {
         "down" => {
-            send_mouse_input(0, 0, extra_data, down_flag)?;
+            send_mouse_input(ctx, 0, 0, extra_data, down_flag)?;
             audit::log_success(TOOL, "mouse_click", &format!("{button} down"));
         }
         "up" => {
-            send_mouse_input(0, 0, extra_data, up_flag)?;
+            send_mouse_input(ctx, 0, 0, extra_data, up_flag)?;
             audit::log_success(TOOL, "mouse_click", &format!("{button} up"));
         }
         "single" => {
-            send_mouse_input(0, 0, extra_data, down_flag)?;
+            send_mouse_input(ctx, 0, 0, extra_data, down_flag)?;
             thread::sleep(Duration::from_millis(10));
-            send_mouse_input(0, 0, extra_data, up_flag)?;
+            send_mouse_input(ctx, 0, 0, extra_data, up_flag)?;
             audit::log_success(TOOL, "mouse_click", &format!("{button} single"));
         }
         "double" => {
             for _ in 0..2 {
-                send_mouse_input(0, 0, extra_data, down_flag)?;
+                send_mouse_input(ctx, 0, 0, extra_data, down_flag)?;
                 thread::sleep(Duration::from_millis(10));
-                send_mouse_input(0, 0, extra_data, up_flag)?;
+                send_mouse_input(ctx, 0, 0, extra_data, up_flag)?;
                 thread::sleep(Duration::from_millis(10));
             }
             audit::log_success(TOOL, "mouse_click", &format!("{button} double"));
         }
         other => {
             audit::log_failure(TOOL, "mouse_click", &format!("unknown type: {other}"));
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx.clone(), format!(
                 "Unknown click type: {other}"
             )));
         }
@@ -167,20 +170,21 @@ fn mouse_click(params: &Value) -> std::result::Result<String, AetherError> {
     Ok(json!({"success": true, "button": button, "type": click_type}).to_string())
 }
 
-fn button_flags(button: &str) -> std::result::Result<(MOUSE_EVENT_FLAGS, MOUSE_EVENT_FLAGS, u32), AetherError> {
+fn button_flags(ctx: &ErrorContext, button: &str) -> std::result::Result<(MOUSE_EVENT_FLAGS, MOUSE_EVENT_FLAGS, u32), AetherError> {
     match button {
         "left" => Ok((MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0)),
         "right" => Ok((MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0)),
         "middle" => Ok((MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0)),
         "x1" => Ok((MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1 as u32)),
         "x2" => Ok((MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON2 as u32)),
-        other => Err(AetherError::invalid_param(format!(
+        other => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown button: {other}"
         ))),
     }
 }
 
 fn send_mouse_input(
+    ctx: &ErrorContext,
     dx: i32,
     dy: i32,
     mouse_data: u32,
@@ -202,7 +206,7 @@ fn send_mouse_input(
 
     let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
     if sent == 0 {
-        return Err(AetherError::win32("SendInput failed for mouse event"));
+        return Err(AetherError::win32(ctx.clone(), "SendInput", "mouse event"));
     }
     Ok(())
 }
@@ -211,7 +215,7 @@ fn send_mouse_input(
 // 3. mouse_scroll — scroll with SendInput (WHEEL_DELTA = 120 per click)
 // ===========================================================================
 
-fn mouse_scroll(params: &Value) -> std::result::Result<String, AetherError> {
+fn mouse_scroll(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let direction = params["direction"].as_str().unwrap_or("vertical");
     let amount = params["amount"].as_u64().unwrap_or(1) as u32;
     let wheel_delta: i32 = if (amount as u64) <= u32::MAX as u64 / 120 {
@@ -224,7 +228,7 @@ fn mouse_scroll(params: &Value) -> std::result::Result<String, AetherError> {
         "vertical" => MOUSEEVENTF_WHEEL,
         "horizontal" => MOUSEEVENTF_HWHEEL,
         other => {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx.clone(), format!(
                 "Unknown scroll direction: {other}"
             )));
         }
@@ -246,7 +250,7 @@ fn mouse_scroll(params: &Value) -> std::result::Result<String, AetherError> {
 
     let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
     if sent == 0 {
-        return Err(AetherError::win32("SendInput failed for scroll event"));
+        return Err(AetherError::win32(ctx.clone(), "SendInput", "scroll event"));
     }
 
     audit::log_success(TOOL, "mouse_scroll", &format!("{direction} clicks={amount}"));
@@ -257,9 +261,9 @@ fn mouse_scroll(params: &Value) -> std::result::Result<String, AetherError> {
 // 4. mouse_position — get cursor position
 // ===========================================================================
 
-fn mouse_position() -> std::result::Result<String, AetherError> {
+fn mouse_position(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut pt = POINT::default();
-    unsafe { GetCursorPos(&mut pt) }.map_err(|e| AetherError::win32(e))?;
+    unsafe { GetCursorPos(&mut pt) }.map_err(|e| AetherError::win32(ctx.clone(), "GetCursorPos", e))?;
     Ok(json!({"x": pt.x, "y": pt.y}).to_string())
 }
 
@@ -267,10 +271,10 @@ fn mouse_position() -> std::result::Result<String, AetherError> {
 // 5. keyboard_type — type text using KEYEVENTF_UNICODE
 // ===========================================================================
 
-fn keyboard_type(params: &Value) -> std::result::Result<String, AetherError> {
+fn keyboard_type(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let text = params["text"]
         .as_str()
-        .ok_or_else(|| AetherError::invalid_param("keyboard_type requires 'text' parameter"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "keyboard_type requires 'text' parameter"))?;
 
     for ch in text.chars() {
         let scan_code = ch as u16;
@@ -306,9 +310,11 @@ fn keyboard_type(params: &Value) -> std::result::Result<String, AetherError> {
         let sent =
             unsafe { SendInput(&[input_down, input_up], size_of::<INPUT>() as i32) };
         if sent < 2 {
-            return Err(AetherError::win32(format!(
-                "SendInput failed for char '{ch}' (sent {sent} of 2)"
-            )));
+            return Err(AetherError::win32(
+                ctx.clone(),
+                "SendInput",
+                format!("failed for char '{ch}' (sent {sent} of 2)"),
+            ));
         }
         thread::sleep(Duration::from_millis(1));
     }
@@ -321,19 +327,19 @@ fn keyboard_type(params: &Value) -> std::result::Result<String, AetherError> {
 // 6. keyboard_press — press key combo (down in order, up in reverse)
 // ===========================================================================
 
-fn keyboard_press(params: &Value) -> std::result::Result<String, AetherError> {
+fn keyboard_press(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let keys = params["keys"]
         .as_array()
-        .ok_or_else(|| AetherError::invalid_param("keyboard_press requires 'keys' array"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "keyboard_press requires 'keys' array"))?;
 
     if keys.is_empty() {
-        return Err(AetherError::invalid_param("keyboard_press: 'keys' array is empty"));
+        return Err(AetherError::invalid_param(ctx.clone(), "keyboard_press: 'keys' array is empty"));
     }
 
     let vk_codes: Vec<VIRTUAL_KEY> = keys
         .iter()
-        .map(|v| v.as_str().ok_or_else(|| AetherError::invalid_param("key name must be a string"))
-            .and_then(vk_from_name))
+        .map(|v| v.as_str().ok_or_else(|| AetherError::invalid_param(ctx.clone(), "key name must be a string"))
+            .and_then(|n| vk_from_name(ctx, n)))
         .collect::<Result<Vec<_>, _>>()?;
 
     let n = vk_codes.len();
@@ -354,10 +360,11 @@ fn keyboard_press(params: &Value) -> std::result::Result<String, AetherError> {
         };
         let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
         if sent == 0 {
-            return Err(AetherError::win32(format!(
-                "SendInput failed pressing key {i} (vk=0x{:X})",
-                vk.0
-            )));
+            return Err(AetherError::win32(
+                ctx.clone(),
+                "SendInput",
+                format!("failed pressing key {i} (vk=0x{:X})", vk.0),
+            ));
         }
     }
 
@@ -378,10 +385,11 @@ fn keyboard_press(params: &Value) -> std::result::Result<String, AetherError> {
         };
         let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
         if sent == 0 {
-            return Err(AetherError::win32(format!(
-                "SendInput failed releasing key {i} (vk=0x{:X})",
-                vk.0
-            )));
+            return Err(AetherError::win32(
+                ctx.clone(),
+                "SendInput",
+                format!("failed releasing key {i} (vk=0x{:X})", vk.0),
+            ));
         }
     }
 
@@ -412,10 +420,10 @@ fn keyboard_state() -> std::result::Result<String, AetherError> {
 // 8. find_window — exact match via FindWindowW, or partial via EnumWindows
 // ===========================================================================
 
-fn find_window(params: &Value) -> std::result::Result<String, AetherError> {
+fn find_window(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let title_str = params["title"]
         .as_str()
-        .ok_or_else(|| AetherError::invalid_param("find_window requires 'title' parameter"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "find_window requires 'title' parameter"))?;
     let class_str = params["class"].as_str();
 
     // Try exact match first
@@ -512,7 +520,7 @@ unsafe extern "system" fn enum_find_window_callback(hwnd: HWND, lparam: LPARAM) 
 // 9. list_windows — list all top-level windows
 // ===========================================================================
 
-fn list_windows() -> std::result::Result<String, AetherError> {
+fn list_windows(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut entries: Vec<WindowEntry> = Vec::new();
 
     unsafe {
@@ -521,6 +529,8 @@ fn list_windows() -> std::result::Result<String, AetherError> {
             LPARAM(std::ptr::addr_of_mut!(entries) as isize),
         );
     }
+
+    let _ = ctx; // ctx is available but no errors to construct in this path
 
     audit::log_success(TOOL, "list_windows", &format!("{} windows", entries.len()));
 
@@ -587,8 +597,8 @@ unsafe extern "system" fn enum_list_windows_callback(hwnd: HWND, lparam: LPARAM)
 // 10. set_window_pos — move/resize window
 // ===========================================================================
 
-fn set_window_pos(params: &Value) -> std::result::Result<String, AetherError> {
-    let hwnd = parse_hwnd(params)?;
+fn set_window_pos(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
+    let hwnd = parse_hwnd(ctx, params)?;
 
     let x = params["x"].as_i64().unwrap_or(0) as i32;
     let y = params["y"].as_i64().unwrap_or(0) as i32;
@@ -610,7 +620,7 @@ fn set_window_pos(params: &Value) -> std::result::Result<String, AetherError> {
     }
 
     unsafe { SetWindowPos(hwnd, HWND(std::ptr::null_mut()), x, y, width, height, flags) }
-        .map_err(|e| AetherError::win32(e))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "SetWindowPos", e))?;
 
     audit::log_success(
         TOOL,
@@ -624,8 +634,8 @@ fn set_window_pos(params: &Value) -> std::result::Result<String, AetherError> {
 // 11. focus_window — bring window to foreground
 // ===========================================================================
 
-fn focus_window(params: &Value) -> std::result::Result<String, AetherError> {
-    let hwnd = parse_hwnd(params)?;
+fn focus_window(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
+    let hwnd = parse_hwnd(ctx, params)?;
 
     // Simulate ALT key to satisfy foreground window rules (allow taskbar activation lock bypass)
     let mut alt_input = INPUT {
@@ -646,7 +656,7 @@ fn focus_window(params: &Value) -> std::result::Result<String, AetherError> {
     unsafe { SendInput(&[alt_input], size_of::<INPUT>() as i32) };
 
     if unsafe { SetForegroundWindow(hwnd) }.0 == 0 {
-        return Err(AetherError::win32("SetForegroundWindow failed"));
+        return Err(AetherError::win32(ctx.clone(), "SetForegroundWindow", "failed"));
     }
 
     audit::log_success(TOOL, "focus_window", &format!("hwnd=0x{:X}", hwnd.0 as usize));
@@ -657,11 +667,11 @@ fn focus_window(params: &Value) -> std::result::Result<String, AetherError> {
 // 12. get_window_rect — get window position/size
 // ===========================================================================
 
-fn get_window_rect(params: &Value) -> std::result::Result<String, AetherError> {
-    let hwnd = parse_hwnd(params)?;
+fn get_window_rect(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
+    let hwnd = parse_hwnd(ctx, params)?;
 
     let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| AetherError::win32(e))?;
+    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| AetherError::win32(ctx.clone(), "GetWindowRect", e))?;
 
     Ok(json!({
         "x": rect.left,
@@ -676,8 +686,8 @@ fn get_window_rect(params: &Value) -> std::result::Result<String, AetherError> {
 // 13. get_window_text — get window title
 // ===========================================================================
 
-fn get_window_text(params: &Value) -> std::result::Result<String, AetherError> {
-    let hwnd = parse_hwnd(params)?;
+fn get_window_text(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
+    let hwnd = parse_hwnd(ctx, params)?;
 
     let mut buf = [0u16; 1024];
     let len = unsafe { GetWindowTextW(hwnd, &mut buf) };
@@ -690,20 +700,21 @@ fn get_window_text(params: &Value) -> std::result::Result<String, AetherError> {
 // 14. close_window — close window (requires force: true)
 // ===========================================================================
 
-fn close_window(params: &Value) -> std::result::Result<String, AetherError> {
+fn close_window(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let is_forced = params["force"].as_bool().unwrap_or(false);
     if !is_forced {
         audit::log_security(TOOL, "close_window", "force not set");
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "close_window requires 'force': true",
         ));
     }
 
-    let hwnd = parse_hwnd(params)?;
+    let hwnd = parse_hwnd(ctx, params)?;
     audit::log_forced(TOOL, "close_window");
 
     unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) }
-        .map_err(|e| AetherError::win32(e))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "PostMessageW", e))?;
 
     Ok(json!({"success": true}).to_string())
 }
@@ -712,14 +723,14 @@ fn close_window(params: &Value) -> std::result::Result<String, AetherError> {
 // 15. screenshot — capture screen or window, save as BMP or base64
 // ===========================================================================
 
-fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
+fn screenshot(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let output_mode = params["output"].as_str().unwrap_or("base64");
     let region = &params["region"];
 
     let hwnd_param = params["hwnd"].as_str();
     let target_hwnd = if let Some(hwnd_hex) = hwnd_param {
         let raw = usize::from_str_radix(hwnd_hex.trim_start_matches("0x"), 16)
-            .map_err(|_| AetherError::invalid_param("Invalid HWND hex string"))?;
+            .map_err(|_| AetherError::invalid_param(ctx.clone(), "Invalid HWND hex string"))?;
         Some(HWND(raw as *mut std::ffi::c_void))
     } else {
         None
@@ -728,10 +739,10 @@ fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
     let (capture_x, capture_y, capture_w, capture_h, screen_dc, window_dc, is_window) =
         if let Some(hwnd) = target_hwnd {
             let mut rect = RECT::default();
-            unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| AetherError::win32(e))?;
+            unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|e| AetherError::win32(ctx.clone(), "GetWindowRect", e))?;
             let dc = unsafe { GetWindowDC(hwnd) };
             if dc.0 == std::ptr::null_mut() {
-                return Err(AetherError::win32("GetWindowDC failed"));
+                return Err(AetherError::win32(ctx.clone(), "GetWindowDC", "failed"));
             }
             (
                 rect.left,
@@ -750,7 +761,7 @@ fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
         ) {
             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
             if dc.0 == std::ptr::null_mut() {
-                return Err(AetherError::win32("GetDC failed"));
+                return Err(AetherError::win32(ctx.clone(), "GetDC", "failed"));
             }
             (x as i32, y as i32, w as i32, h as i32, dc, dc, false)
         } else {
@@ -759,12 +770,12 @@ fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
             let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
             let dc = unsafe { GetDC(HWND(std::ptr::null_mut())) };
             if dc.0 == std::ptr::null_mut() {
-                return Err(AetherError::win32("GetDC failed"));
+                return Err(AetherError::win32(ctx.clone(), "GetDC", "failed"));
             }
             (0, 0, screen_w, screen_h, dc, dc, false)
         };
 
-    let result = capture_to_bmp(screen_dc, capture_x, capture_y, capture_w, capture_h);
+    let result = capture_to_bmp(ctx, screen_dc, capture_x, capture_y, capture_w, capture_h);
 
     // Cleanup DCs
     if is_window {
@@ -798,7 +809,7 @@ fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
         }
         file_path => {
             std::fs::write(file_path, &bmp_bytes)
-                .map_err(|e| AetherError::win32(e))?;
+                .map_err(|e| AetherError::win32(ctx.clone(), "std::fs::write", e))?;
             audit::log_success(
                 TOOL,
                 "screenshot",
@@ -816,20 +827,20 @@ fn screenshot(params: &Value) -> std::result::Result<String, AetherError> {
     }
 }
 
-fn capture_to_bmp(dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Result<Vec<u8>, AetherError> {
+fn capture_to_bmp(ctx: &ErrorContext, dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Result<Vec<u8>, AetherError> {
     if w <= 0 || h <= 0 {
-        return Err(AetherError::invalid_param("Invalid capture dimensions"));
+        return Err(AetherError::invalid_param(ctx.clone(), "Invalid capture dimensions"));
     }
 
     let mem_dc = unsafe { CreateCompatibleDC(dc) };
     if mem_dc.0 == std::ptr::null_mut() {
-        return Err(AetherError::win32("CreateCompatibleDC failed"));
+        return Err(AetherError::win32(ctx.clone(), "CreateCompatibleDC", "failed"));
     }
 
     let bitmap = unsafe { CreateCompatibleBitmap(dc, w, h) };
     if bitmap.0 == std::ptr::null_mut() {
         unsafe { DeleteDC(mem_dc) };
-        return Err(AetherError::win32("CreateCompatibleBitmap failed"));
+        return Err(AetherError::win32(ctx.clone(), "CreateCompatibleBitmap", "failed"));
     }
 
     let old_bitmap = unsafe { SelectObject(mem_dc, bitmap) };
@@ -838,7 +849,7 @@ fn capture_to_bmp(dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Resul
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        return Err(AetherError::win32("SelectObject failed"));
+        return Err(AetherError::win32(ctx.clone(), "SelectObject", "failed"));
     }
 
     let result = unsafe { BitBlt(mem_dc, 0, 0, w, h, dc, x, y, SRCCOPY) };
@@ -848,7 +859,7 @@ fn capture_to_bmp(dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Resul
             DeleteObject(bitmap);
             DeleteDC(mem_dc);
         }
-        return Err(AetherError::win32("BitBlt failed"));
+        return Err(AetherError::win32(ctx.clone(), "BitBlt", "failed"));
     }
 
     // Build BITMAPINFO for 32-bit BGRA
@@ -884,7 +895,7 @@ fn capture_to_bmp(dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Resul
     }
 
     if rows_copied == 0 || rows_copied == i32::MAX {
-        return Err(AetherError::win32("GetDIBits failed"));
+        return Err(AetherError::win32(ctx.clone(), "GetDIBits", "failed"));
     }
 
     // Build BMP file in memory
@@ -924,20 +935,20 @@ fn capture_to_bmp(dc: HDC, x: i32, y: i32, w: i32, h: i32) -> std::result::Resul
 // 16. clipboard_read — read clipboard text (CF_UNICODETEXT)
 // ===========================================================================
 
-fn clipboard_read() -> std::result::Result<String, AetherError> {
+fn clipboard_read(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     if unsafe { OpenClipboard(0) } == 0 {
-        return Err(AetherError::win32("OpenClipboard failed"));
+        return Err(AetherError::win32(ctx.clone(), "OpenClipboard", "failed"));
     }
 
     let result = (|| -> Result<String, AetherError> {
         let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
         if handle == 0 {
-            return Err(AetherError::win32("Clipboard has no Unicode text"));
+            return Err(AetherError::win32(ctx.clone(), "GetClipboardData", "no Unicode text"));
         }
 
         let ptr = unsafe { GlobalLock(HGLOBAL(handle as *mut c_void)) };
         if ptr.is_null() {
-            return Err(AetherError::win32("GlobalLock failed for clipboard data"));
+            return Err(AetherError::win32(ctx.clone(), "GlobalLock", "clipboard data"));
         }
 
         let text = unsafe {
@@ -953,7 +964,7 @@ fn clipboard_read() -> std::result::Result<String, AetherError> {
 
     let close_result = unsafe { CloseClipboard() };
     if close_result == 0 {
-        return Err(AetherError::win32("CloseClipboard failed"));
+        return Err(AetherError::win32(ctx.clone(), "CloseClipboard", "failed"));
     }
 
     match &result {
@@ -973,29 +984,29 @@ fn clipboard_read() -> std::result::Result<String, AetherError> {
 // 17. clipboard_write — write text to clipboard (CF_UNICODETEXT)
 // ===========================================================================
 
-fn clipboard_write(params: &Value) -> std::result::Result<String, AetherError> {
+fn clipboard_write(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let text = params["text"]
         .as_str()
-        .ok_or_else(|| AetherError::invalid_param("clipboard_write requires 'text' parameter"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "clipboard_write requires 'text' parameter"))?;
 
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let byte_count = wide.len() * 2;
 
     if unsafe { OpenClipboard(0) } == 0 {
-        return Err(AetherError::win32("OpenClipboard failed"));
+        return Err(AetherError::win32(ctx.clone(), "OpenClipboard", "failed"));
     }
 
     let result = (|| -> Result<(), AetherError> {
         let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_count) }
-            .map_err(|e| AetherError::win32(e))?;
+            .map_err(|e| AetherError::win32(ctx.clone(), "GlobalAlloc", e))?;
         if hglobal.0 == std::ptr::null_mut() {
-            return Err(AetherError::win32("GlobalAlloc failed for clipboard write"));
+            return Err(AetherError::win32(ctx.clone(), "GlobalAlloc", "clipboard write"));
         }
 
         let ptr = unsafe { GlobalLock(hglobal) };
         if ptr.is_null() {
             unsafe { GlobalFree(hglobal) };
-            return Err(AetherError::win32("GlobalLock failed for clipboard write"));
+            return Err(AetherError::win32(ctx.clone(), "GlobalLock", "clipboard write"));
         }
 
         unsafe {
@@ -1006,13 +1017,13 @@ fn clipboard_write(params: &Value) -> std::result::Result<String, AetherError> {
 
         if unsafe { EmptyClipboard() } == 0 {
             unsafe { GlobalFree(hglobal) };
-            return Err(AetherError::win32("EmptyClipboard failed"));
+            return Err(AetherError::win32(ctx.clone(), "EmptyClipboard", "failed"));
         }
 
         let set_handle = unsafe { SetClipboardData(CF_UNICODETEXT, hglobal.0 as isize) };
         if set_handle == 0 {
             unsafe { GlobalFree(hglobal) };
-            return Err(AetherError::win32("SetClipboardData failed"));
+            return Err(AetherError::win32(ctx.clone(), "SetClipboardData", "failed"));
         }
         // On success, clipboard owns the memory — do NOT free hglobal
 
@@ -1023,7 +1034,7 @@ fn clipboard_write(params: &Value) -> std::result::Result<String, AetherError> {
 
     result?;
     if close_result == 0 {
-        return Err(AetherError::win32("CloseClipboard failed"));
+        return Err(AetherError::win32(ctx.clone(), "CloseClipboard", "failed"));
     }
 
     let preview: String = text.chars().take(80).collect();
@@ -1035,7 +1046,7 @@ fn clipboard_write(params: &Value) -> std::result::Result<String, AetherError> {
 // 18. display_info — get monitor information
 // ===========================================================================
 
-fn display_info() -> std::result::Result<String, AetherError> {
+fn display_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut devmode: DEVMODEW = unsafe { zeroed() };
     devmode.dmSize = size_of::<DEVMODEW>() as u16;
 
@@ -1048,7 +1059,7 @@ fn display_info() -> std::result::Result<String, AetherError> {
     };
 
     if result == BOOL(0) {
-        return Err(AetherError::win32("EnumDisplaySettingsW failed"));
+        return Err(AetherError::win32(ctx.clone(), "EnumDisplaySettingsW", "failed"));
     }
 
     let dpi = unsafe { GetDpiForSystem() };
@@ -1067,22 +1078,23 @@ fn display_info() -> std::result::Result<String, AetherError> {
 // 19. set_resolution — change display resolution (requires force: true)
 // ===========================================================================
 
-fn set_resolution(params: &Value) -> std::result::Result<String, AetherError> {
+fn set_resolution(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     let is_forced = params["force"].as_bool().unwrap_or(false);
     if !is_forced {
         audit::log_security(TOOL, "set_resolution", "force not set");
         return Err(AetherError::invalid_param(
+            ctx.clone(),
             "set_resolution requires 'force': true",
         ));
     }
 
     let width = params["width"]
         .as_u64()
-        .ok_or_else(|| AetherError::invalid_param("set_resolution requires 'width'"))?
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "set_resolution requires 'width'"))?
         as u32;
     let height = params["height"]
         .as_u64()
-        .ok_or_else(|| AetherError::invalid_param("set_resolution requires 'height'"))?
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "set_resolution requires 'height'"))?
         as u32;
     let refresh = params["refresh_rate"].as_u64().unwrap_or(60) as u32;
 
@@ -1099,7 +1111,7 @@ fn set_resolution(params: &Value) -> std::result::Result<String, AetherError> {
     if result != DISP_CHANGE_SUCCESSFUL {
         let msg = format!("ChangeDisplaySettingsW failed: {:?}", result);
         audit::log_failure(TOOL, "set_resolution", &msg);
-        return Err(AetherError::win32(msg));
+        return Err(AetherError::win32(ctx.clone(), "ChangeDisplaySettingsW", msg));
     }
 
     audit::log_success(
@@ -1115,7 +1127,7 @@ fn set_resolution(params: &Value) -> std::result::Result<String, AetherError> {
 // 20. audio_volume — get/set system volume (0-100 mapped to 0x0000-0xFFFF)
 // ===========================================================================
 
-fn audio_volume(params: &Value) -> std::result::Result<String, AetherError> {
+fn audio_volume(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     if let Some(level) = params["level"].as_u64() {
         // Set volume
         let clamped = level.min(100);
@@ -1124,10 +1136,7 @@ fn audio_volume(params: &Value) -> std::result::Result<String, AetherError> {
 
         let result = unsafe { waveOutSetVolume(HWAVEOUT(usize::MAX as *mut std::ffi::c_void), combined) };
         if result != 0u32 {
-            return Err(AetherError::win32(format!(
-                "waveOutSetVolume failed: {:?}",
-                result
-            )));
+            return Err(AetherError::win32(ctx.clone(), "waveOutSetVolume", format!("{:?}", result)));
         }
         audit::log_success(TOOL, "audio_volume", &format!("set to {clamped}%"));
         return Ok(json!({"success": true, "level": clamped}).to_string());
@@ -1137,10 +1146,7 @@ fn audio_volume(params: &Value) -> std::result::Result<String, AetherError> {
     let mut vol: u32 = 0;
     let result = unsafe { waveOutGetVolume(HWAVEOUT(usize::MAX as *mut std::ffi::c_void), &mut vol) };
     if result != 0u32 {
-        return Err(AetherError::win32(format!(
-            "waveOutGetVolume failed: {:?}",
-            result
-        )));
+        return Err(AetherError::win32(ctx.clone(), "waveOutGetVolume", format!("{:?}", result)));
     }
 
     // Low word = left channel
@@ -1154,17 +1160,14 @@ fn audio_volume(params: &Value) -> std::result::Result<String, AetherError> {
 // 21. audio_mute — get/set mute (volume == 0 = muted)
 // ===========================================================================
 
-fn audio_mute(params: &Value) -> std::result::Result<String, AetherError> {
+fn audio_mute(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     if let Some(_) = params.get("mute") {
         let do_mute = params["mute"].as_bool().unwrap_or(false);
 
         if do_mute {
             let result = unsafe { waveOutSetVolume(HWAVEOUT(usize::MAX as *mut std::ffi::c_void), 0) };
             if result != 0u32 {
-                return Err(AetherError::win32(format!(
-                    "waveOutSetVolume (mute) failed: {:?}",
-                    result
-                )));
+                return Err(AetherError::win32(ctx.clone(), "waveOutSetVolume", format!("mute: {:?}", result)));
             }
             audit::log_success(TOOL, "audio_mute", "muted");
         } else {
@@ -1173,10 +1176,7 @@ fn audio_mute(params: &Value) -> std::result::Result<String, AetherError> {
             let combined = value | (value << 16);
             let result = unsafe { waveOutSetVolume(HWAVEOUT(usize::MAX as *mut std::ffi::c_void), combined) };
             if result != 0u32 {
-                return Err(AetherError::win32(format!(
-                    "waveOutSetVolume (unmute) failed: {:?}",
-                    result
-                )));
+                return Err(AetherError::win32(ctx.clone(), "waveOutSetVolume", format!("unmute: {:?}", result)));
             }
             audit::log_success(TOOL, "audio_mute", "unmuted (restored 100%)");
         }
@@ -1188,10 +1188,7 @@ fn audio_mute(params: &Value) -> std::result::Result<String, AetherError> {
     let mut vol: u32 = 0;
     let result = unsafe { waveOutGetVolume(HWAVEOUT(usize::MAX as *mut std::ffi::c_void), &mut vol) };
     if result != 0u32 {
-        return Err(AetherError::win32(format!(
-            "waveOutGetVolume (mute check) failed: {:?}",
-            result
-        )));
+        return Err(AetherError::win32(ctx.clone(), "waveOutGetVolume", format!("mute check: {:?}", result)));
     }
 
     let muted = vol == 0 || ((vol & 0xFFFF) == 0 && ((vol >> 16) & 0xFFFF) == 0);
@@ -1202,9 +1199,9 @@ fn audio_mute(params: &Value) -> std::result::Result<String, AetherError> {
 // 22. screen_lock — lock workstation
 // ===========================================================================
 
-fn screen_lock() -> std::result::Result<String, AetherError> {
+fn screen_lock(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     audit::log_security(TOOL, "screen_lock", "locking workstation");
-    unsafe { LockWorkStation() }.map_err(|e| AetherError::win32(e))?;
+    unsafe { LockWorkStation() }.map_err(|e| AetherError::win32(ctx.clone(), "LockWorkStation", e))?;
     Ok(json!({"success": true}).to_string())
 }
 
@@ -1212,7 +1209,7 @@ fn screen_lock() -> std::result::Result<String, AetherError> {
 // 23. input_locale — get/set keyboard layout
 // ===========================================================================
 
-fn input_locale(params: &Value) -> std::result::Result<String, AetherError> {
+fn input_locale(ctx: &ErrorContext, params: &Value) -> std::result::Result<String, AetherError> {
     if let Some(locale) = params["locale_id"].as_str() {
         // Set layout
         let locale_wide: Vec<u16> = locale
@@ -1221,9 +1218,11 @@ fn input_locale(params: &Value) -> std::result::Result<String, AetherError> {
             .collect();
 
         let _hkl = unsafe { LoadKeyboardLayoutW(PCWSTR(locale_wide.as_ptr()), KLF_ACTIVATE) }
-            .map_err(|e| AetherError::win32(format!(
-                "LoadKeyboardLayoutW failed for locale: {locale}: {e}"
-            )))?;
+            .map_err(|e| AetherError::win32(
+                ctx.clone(),
+                "LoadKeyboardLayoutW",
+                format!("locale: {locale}: {e}"),
+            ))?;
 
         audit::log_success(TOOL, "input_locale", &format!("set to {locale}"));
         return Ok(json!({"success": true, "locale_id": locale}).to_string());
@@ -1242,26 +1241,26 @@ fn input_locale(params: &Value) -> std::result::Result<String, AetherError> {
 
 /// Parse a HWND from params. Accepts `hwnd` as hex string (optionally prefixed
 /// with "0x") or as a decimal string.
-fn parse_hwnd(params: &Value) -> std::result::Result<HWND, AetherError> {
+fn parse_hwnd(ctx: &ErrorContext, params: &Value) -> std::result::Result<HWND, AetherError> {
     let raw = params["hwnd"]
         .as_str()
-        .ok_or_else(|| AetherError::invalid_param("Missing 'hwnd' parameter"))?;
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "Missing 'hwnd' parameter"))?;
 
     let hwnd_val = if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
         usize::from_str_radix(hex, 16)
-            .map_err(|_| AetherError::invalid_param("Invalid HWND hex string"))?
+            .map_err(|_| AetherError::invalid_param(ctx.clone(), "Invalid HWND hex string"))?
     } else {
         raw.parse::<usize>()
-            .map_err(|_| AetherError::invalid_param("Invalid HWND value"))?
+            .map_err(|_| AetherError::invalid_param(ctx.clone(), "Invalid HWND value"))?
     };
 
     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
 
     // Validate that the handle looks like a real window
     if unsafe { IsWindow(hwnd) }.0 == 0 {
-        return Err(AetherError::not_found(format!(
+        return Err(AetherError::not_found(ctx.clone(), format!(
             "Window handle 0x{hwnd_val:X} is not a valid window"
-        )));
+        ), None));
     }
 
     Ok(hwnd)
@@ -1271,7 +1270,7 @@ fn parse_hwnd(params: &Value) -> std::result::Result<HWND, AetherError> {
 ///
 /// Supports: CTRL, ALT, SHIFT, WIN, ENTER, TAB, ESC, SPACE, DELETE,
 /// BACKSPACE, F1–F12, and single letters A–Z.
-fn vk_from_name(name: &str) -> std::result::Result<VIRTUAL_KEY, AetherError> {
+fn vk_from_name(ctx: &ErrorContext, name: &str) -> std::result::Result<VIRTUAL_KEY, AetherError> {
     match name.to_uppercase().as_str() {
         "CTRL" | "CONTROL" => Ok(VK_CONTROL),
         "ALT" | "MENU" => Ok(VK_MENU),
@@ -1324,12 +1323,12 @@ fn vk_from_name(name: &str) -> std::result::Result<VIRTUAL_KEY, AetherError> {
             } else if ch.is_ascii_lowercase() {
                 Ok(VIRTUAL_KEY(ch.to_ascii_uppercase() as u16))
             } else {
-                Err(AetherError::invalid_param(format!(
+                Err(AetherError::invalid_param(ctx.clone(), format!(
                     "Unsupported key character: '{ch}'"
                 )))
             }
         }
-        other => Err(AetherError::invalid_param(format!(
+        other => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown key name: '{other}'"
         ))),
     }

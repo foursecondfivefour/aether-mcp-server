@@ -10,7 +10,7 @@
 #![allow(unsafe_code)]
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 use serde_json::{json, Value};
 use std::ffi::c_void;
@@ -111,9 +111,12 @@ pub async fn handle_process_control(
         "list_handles" => list_handles(params).await,
         "list_modules" => list_modules(params).await,
         "inject_dll" => inject_dll(server, params).await,
-        unknown => Err(AetherError::invalid_param(format!(
-            "Unknown action: {unknown}. Valid: list, kill, create, set_priority, query_info, threads, set_affinity, memory_limits, suspend, resume, list_handles, list_modules, inject_dll"
-        ))),
+        unknown => {
+            let ctx = ErrorContext::new("process_control", "unknown");
+            Err(AetherError::invalid_param(ctx, format!(
+                "Unknown action: {unknown}. Valid: list, kill, create, set_priority, query_info, threads, set_affinity, memory_limits, suspend, resume, list_handles, list_modules, inject_dll"
+            )))
+        }
     };
 
     match &result {
@@ -128,33 +131,33 @@ pub async fn handle_process_control(
 // Helper: extract value from JSON params
 // ---------------------------------------------------------------------------
 
-fn get_u32(params: &Value, key: &str) -> std::result::Result<u32, AetherError> {
+fn get_u32(ctx: ErrorContext, params: &Value, key: &str) -> std::result::Result<u32, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
-        .ok_or_else(|| AetherError::invalid_param(format!("Missing or invalid `{key}` (u32)")))
+        .ok_or_else(|| AetherError::invalid_param(ctx, format!("Missing or invalid `{key}` (u32)")))
 }
 
 fn get_bool(params: &Value, key: &str) -> bool {
     params.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-fn get_string(params: &Value, key: &str) -> std::result::Result<String, AetherError> {
+fn get_string(ctx: ErrorContext, params: &Value, key: &str) -> std::result::Result<String, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_str())
         .map(String::from)
-        .ok_or_else(|| AetherError::invalid_param(format!("Missing or invalid `{key}` (string)")))
+        .ok_or_else(|| AetherError::invalid_param(ctx, format!("Missing or invalid `{key}` (string)")))
 }
 
 fn get_optional_string(params: &Value, key: &str) -> Option<String> {
     params.get(key).and_then(|v| v.as_str()).map(String::from)
 }
 
-fn check_force(params: &Value) -> std::result::Result<(), AetherError> {
+fn check_force(ctx: ErrorContext, params: &Value) -> std::result::Result<(), AetherError> {
     if !get_bool(params, "force") {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::permission_denied(ctx,
             "This operation requires `force: true` for safety. Set `force: true` to proceed.",
         ));
     }
@@ -170,6 +173,8 @@ fn wide_string(s: &str) -> Vec<u16> {
 // ---------------------------------------------------------------------------
 
 async fn list_processes(_params: Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("process_control", "list");
+
     // SAFETY: CreateToolhelp32Snapshot is a read-only diagnostic API.
     // HANDLE is closed via CloseHandle before returning.
     let snapshot = unsafe {
@@ -178,7 +183,7 @@ async fn list_processes(_params: Value) -> std::result::Result<String, AetherErr
             0,
         )
     }
-    .map_err(|e| AetherError::win32(format!("CreateToolhelp32Snapshot failed: {e}")))?;
+    .map_err(|e| AetherError::win32(ctx.clone(), "CreateToolhelp32Snapshot", format!("CreateToolhelp32Snapshot failed: {e}")))?;
 
     let mut entry = PROCESSENTRY32W {
         dwSize: mem::size_of::<PROCESSENTRY32W>() as u32,
@@ -221,7 +226,7 @@ async fn list_processes(_params: Value) -> std::result::Result<String, AetherErr
     }
 
     let result = json!({ "processes": processes, "count": processes.len() });
-    serde_json::to_string(&result).map_err(AetherError::Serde)
+    serde_json::to_string(&result).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -229,16 +234,17 @@ async fn list_processes(_params: Value) -> std::result::Result<String, AetherErr
 // ---------------------------------------------------------------------------
 
 async fn kill_process(params: Value) -> std::result::Result<String, AetherError> {
-    check_force(&params)?;
+    let ctx = ErrorContext::new("process_control", "kill");
+    check_force(ctx.clone(), &params)?;
     audit::log_forced("process_control", "kill");
 
     let pid = if let Some(name) = get_optional_string(&params, "name") {
-        find_pid_by_name(&name)?
+        find_pid_by_name(ctx.clone(), &name)?
     } else {
-        get_u32(&params, "pid")?
+        get_u32(ctx.clone(), &params, "pid")?
     };
 
-    let handle = open_process(pid, PROCESS_TERMINATE)?;
+    let handle = open_process(ctx.clone(), pid, PROCESS_TERMINATE)?;
 
     // SAFETY: handle was opened with PROCESS_TERMINATE access for the target pid.
     // uExitCode of 1 indicates forced termination.
@@ -246,20 +252,20 @@ async fn kill_process(params: Value) -> std::result::Result<String, AetherError>
     unsafe {
         let _ = CloseHandle(handle);
     }
-    result.map_err(|e| AetherError::win32(format!("TerminateProcess({pid}) failed: {e}")))?;
+    result.map_err(|e| AetherError::win32(ctx.clone(), "TerminateProcess", format!("TerminateProcess({pid}) failed: {e}")))?;
 
     let output = json!({ "terminated_pid": pid });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-fn find_pid_by_name(name: &str) -> std::result::Result<u32, AetherError> {
+fn find_pid_by_name(ctx: ErrorContext, name: &str) -> std::result::Result<u32, AetherError> {
     let snapshot = unsafe {
         CreateToolhelp32Snapshot(
             CREATE_TOOLHELP_SNAPSHOT_FLAGS(TH32CS_SNAPPROCESS.0),
             0,
         )
     }
-    .map_err(|e| AetherError::win32(format!("CreateToolhelp32Snapshot failed: {e}")))?;
+    .map_err(|e| AetherError::win32(ctx.clone(), "CreateToolhelp32Snapshot", format!("CreateToolhelp32Snapshot failed: {e}")))?;
 
     let mut entry = PROCESSENTRY32W {
         dwSize: mem::size_of::<PROCESSENTRY32W>() as u32,
@@ -291,7 +297,7 @@ fn find_pid_by_name(name: &str) -> std::result::Result<u32, AetherError> {
         let _ = CloseHandle(snapshot);
     }
 
-    found.ok_or_else(|| AetherError::not_found(format!("No process matching name: {name}")))
+    found.ok_or_else(|| AetherError::not_found(ctx, format!("No process matching name: {name}"), None))
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +305,8 @@ fn find_pid_by_name(name: &str) -> std::result::Result<u32, AetherError> {
 // ---------------------------------------------------------------------------
 
 async fn create_process(params: Value) -> std::result::Result<String, AetherError> {
-    let path = get_string(&params, "path")?;
+    let ctx = ErrorContext::new("process_control", "create");
+    let path = get_string(ctx.clone(), &params, "path")?;
     let args = get_optional_string(&params, "args");
     let working_dir = get_optional_string(&params, "working_dir");
     let show_window = get_bool(&params, "show_window");
@@ -352,7 +359,7 @@ async fn create_process(params: Value) -> std::result::Result<String, AetherErro
         )
     };
 
-    result.map_err(|e| AetherError::win32(format!("CreateProcessW failed: {e}")))?;
+    result.map_err(|e| AetherError::win32(ctx.clone(), "CreateProcessW", format!("CreateProcessW failed: {e}")))?;
 
     let pid = proc_info.dwProcessId;
     let tid = proc_info.dwThreadId;
@@ -368,7 +375,7 @@ async fn create_process(params: Value) -> std::result::Result<String, AetherErro
         "tid": tid,
         "path": path,
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +383,9 @@ async fn create_process(params: Value) -> std::result::Result<String, AetherErro
 // ---------------------------------------------------------------------------
 
 async fn set_priority(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
-    let priority_str = get_string(&params, "priority")?;
+    let ctx = ErrorContext::new("process_control", "set_priority");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
+    let priority_str = get_string(ctx.clone(), &params, "priority")?;
 
     let priority_class = match priority_str.to_lowercase().as_str() {
         "idle" => IDLE_PRIORITY_CLASS,
@@ -386,18 +394,19 @@ async fn set_priority(params: Value) -> std::result::Result<String, AetherError>
         "above_normal" => ABOVE_NORMAL_PRIORITY_CLASS,
         "high" => HIGH_PRIORITY_CLASS,
         "realtime" => {
-            check_force(&params)?;
+            check_force(ctx.clone(), &params)?;
             audit::log_forced("process_control", "set_priority_realtime");
             REALTIME_PRIORITY_CLASS
         }
         other => {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx, format!(
                 "Unknown priority: {other}. Valid: idle, below_normal, normal, above_normal, high, realtime"
             )));
         }
     };
 
     let handle = open_process(
+        ctx.clone(),
         pid,
         PROCESS_SET_INFORMATION,
     )?;
@@ -407,13 +416,13 @@ async fn set_priority(params: Value) -> std::result::Result<String, AetherError>
     unsafe {
         let _ = CloseHandle(handle);
     }
-    result.map_err(|e| AetherError::win32(format!("SetPriorityClass({pid}) failed: {e}")))?;
+    result.map_err(|e| AetherError::win32(ctx.clone(), "SetPriorityClass", format!("SetPriorityClass({pid}) failed: {e}")))?;
 
     let output = json!({
         "pid": pid,
         "priority": priority_str,
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -421,9 +430,11 @@ async fn set_priority(params: Value) -> std::result::Result<String, AetherError>
 // ---------------------------------------------------------------------------
 
 async fn query_info(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "query_info");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
 
     let handle = open_process(
+        ctx.clone(),
         pid,
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
     )?;
@@ -445,7 +456,7 @@ async fn query_info(params: Value) -> std::result::Result<String, AetherError> {
             &mut user_time,
         )
     }
-    .map_err(|e| AetherError::win32(format!("GetProcessTimes({pid}) failed: {e}")))?;
+    .map_err(|e| AetherError::win32(ctx.clone(), "GetProcessTimes", format!("GetProcessTimes({pid}) failed: {e}")))?;
 
     // Get memory info
     let mut mem_counters = PROCESS_MEMORY_COUNTERS {
@@ -466,7 +477,7 @@ async fn query_info(params: Value) -> std::result::Result<String, AetherError> {
         unsafe {
             let _ = CloseHandle(handle);
         }
-        return Err(AetherError::win32(format!(
+        return Err(AetherError::win32(ctx, "K32GetProcessMemoryInfo", format!(
             "K32GetProcessMemoryInfo({pid}) failed"
         )));
     }
@@ -491,7 +502,7 @@ async fn query_info(params: Value) -> std::result::Result<String, AetherError> {
         "pagefile_usage": mem_counters.PagefileUsage,
         "peak_pagefile_usage": mem_counters.PeakPagefileUsage,
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 fn filetime_to_u64(ft: &FILETIME) -> u64 {
@@ -503,7 +514,8 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
 // ---------------------------------------------------------------------------
 
 async fn list_threads(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "threads");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
 
     // SAFETY: CreateToolhelp32Snapshot is a read-only diagnostic API.
     let snapshot = unsafe {
@@ -512,7 +524,7 @@ async fn list_threads(params: Value) -> std::result::Result<String, AetherError>
             0,
         )
     }
-    .map_err(|e| AetherError::win32(format!("CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) failed: {e}")))?;
+    .map_err(|e| AetherError::win32(ctx.clone(), "CreateToolhelp32Snapshot", format!("CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) failed: {e}")))?;
 
     let mut entry = THREADENTRY32 {
         dwSize: mem::size_of::<THREADENTRY32>() as u32,
@@ -548,7 +560,7 @@ async fn list_threads(params: Value) -> std::result::Result<String, AetherError>
         "threads": threads,
         "count": threads.len(),
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -556,25 +568,26 @@ async fn list_threads(params: Value) -> std::result::Result<String, AetherError>
 // ---------------------------------------------------------------------------
 
 async fn set_affinity(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "set_affinity");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
     let cores: Vec<usize> = params
         .get("cores")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            AetherError::invalid_param("Missing required `cores` (array of core indices)")
+            AetherError::invalid_param(ctx.clone(), "Missing required `cores` (array of core indices)")
         })?
         .iter()
         .filter_map(|c| c.as_u64().map(|n| n as usize))
         .collect();
 
     if cores.is_empty() {
-        return Err(AetherError::invalid_param("`cores` must contain at least one core index"));
+        return Err(AetherError::invalid_param(ctx, "`cores` must contain at least one core index"));
     }
 
     let mut mask: usize = 0;
     for core in &cores {
         if *core >= mem::size_of::<usize>() * 8 {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx.clone(), format!(
                 "Core index {core} exceeds maximum of {}",
                 mem::size_of::<usize>() * 8 - 1
             )));
@@ -583,6 +596,7 @@ async fn set_affinity(params: Value) -> std::result::Result<String, AetherError>
     }
 
     let handle = open_process(
+        ctx.clone(),
         pid,
         PROCESS_SET_INFORMATION
     )?;
@@ -594,14 +608,14 @@ async fn set_affinity(params: Value) -> std::result::Result<String, AetherError>
         let _ = CloseHandle(handle);
     }
     result
-        .map_err(|e| AetherError::win32(format!("SetProcessAffinityMask({pid}) failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "SetProcessAffinityMask", format!("SetProcessAffinityMask({pid}) failed: {e}")))?;
 
     let output = json!({
         "pid": pid,
         "affinity_mask": format!("0x{mask:X}"),
         "cores": cores,
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -609,7 +623,8 @@ async fn set_affinity(params: Value) -> std::result::Result<String, AetherError>
 // ---------------------------------------------------------------------------
 
 async fn memory_limits(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "memory_limits");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
     let min_ws = params
         .get("min_ws")
         .and_then(|v| v.as_u64())
@@ -622,6 +637,7 @@ async fn memory_limits(params: Value) -> std::result::Result<String, AetherError
         .unwrap_or(usize::MAX); // usize::MAX means "don't change maximum"
 
     let handle = open_process(
+        ctx.clone(),
         pid,
         PROCESS_SET_QUOTA | PROCESS_SET_INFORMATION,
     )?;
@@ -633,7 +649,7 @@ async fn memory_limits(params: Value) -> std::result::Result<String, AetherError
         let _ = CloseHandle(handle);
     }
     result.map_err(|e| {
-        AetherError::win32(format!("SetProcessWorkingSetSize({pid}) failed: {e}"))
+        AetherError::win32(ctx.clone(), "SetProcessWorkingSetSize", format!("SetProcessWorkingSetSize({pid}) failed: {e}"))
     })?;
 
     let output = json!({
@@ -641,7 +657,7 @@ async fn memory_limits(params: Value) -> std::result::Result<String, AetherError
         "min_ws": if min_ws == usize::MAX { None } else { Some(min_ws) },
         "max_ws": if max_ws == usize::MAX { None } else { Some(max_ws) },
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,10 +678,11 @@ async fn resume_process_or_thread(params: Value) -> std::result::Result<String, 
 
 async fn suspend_resume_inner(params: Value, resume: bool) -> std::result::Result<String, AetherError> {
     let op_name = if resume { "resume" } else { "suspend" };
+    let ctx = ErrorContext::new("process_control", op_name);
 
     // Single thread mode: tid is provided
-    if let Ok(tid) = get_u32(&params, "tid") {
-        let handle = open_thread(tid, THREAD_SUSPEND_RESUME)?;
+    if let Ok(tid) = get_u32(ctx.clone(), &params, "tid") {
+        let handle = open_thread(ctx.clone(), tid, THREAD_SUSPEND_RESUME)?;
 
         // SAFETY: handle is valid with THREAD_SUSPEND_RESUME for the target tid.
         // SuspendThread/ResumeThread return the previous suspend count (u32).
@@ -681,7 +698,7 @@ async fn suspend_resume_inner(params: Value, resume: bool) -> std::result::Resul
         }
 
         if previous_count == u32::MAX {
-            return Err(AetherError::win32(format!(
+            return Err(AetherError::win32(ctx, "SuspendThread/ResumeThread", format!(
                 "{}(thread {tid}) failed",
                 if resume { "ResumeThread" } else { "SuspendThread" }
             )));
@@ -692,17 +709,17 @@ async fn suspend_resume_inner(params: Value, resume: bool) -> std::result::Resul
             "tid": tid,
             "previous_suspend_count": previous_count,
         });
-        return serde_json::to_string(&output).map_err(AetherError::Serde);
+        return serde_json::to_string(&output).map_err(AetherError::from);
     }
 
     // Process mode: pid is provided — enumerate and suspend/resume all threads
-    let pid = get_u32(&params, "pid")?;
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
 
-    let threads = enumerate_thread_ids(pid)?;
+    let threads = enumerate_thread_ids(ctx.clone(), pid)?;
     let mut results: Vec<Value> = Vec::new();
 
     for &tid in &threads {
-        let handle = match open_thread(tid, THREAD_SUSPEND_RESUME) {
+        let handle = match open_thread(ctx.clone(), tid, THREAD_SUSPEND_RESUME) {
             Ok(h) => h,
             Err(e) => {
                 results.push(json!({
@@ -749,10 +766,10 @@ async fn suspend_resume_inner(params: Value, resume: bool) -> std::result::Resul
         "threads_affected": threads.len(),
         "details": results,
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-fn enumerate_thread_ids(pid: u32) -> std::result::Result<Vec<u32>, AetherError> {
+fn enumerate_thread_ids(ctx: ErrorContext, pid: u32) -> std::result::Result<Vec<u32>, AetherError> {
     // SAFETY: CreateToolhelp32Snapshot is a read-only diagnostic API.
     let snapshot = unsafe {
         CreateToolhelp32Snapshot(
@@ -761,7 +778,7 @@ fn enumerate_thread_ids(pid: u32) -> std::result::Result<Vec<u32>, AetherError> 
         )
     }
     .map_err(|e| {
-        AetherError::win32(format!("CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) failed: {e}"))
+        AetherError::win32(ctx.clone(), "CreateToolhelp32Snapshot", format!("CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD) failed: {e}"))
     })?;
 
     let mut entry = THREADENTRY32 {
@@ -787,9 +804,9 @@ fn enumerate_thread_ids(pid: u32) -> std::result::Result<Vec<u32>, AetherError> 
     }
 
     if tids.is_empty() {
-        return Err(AetherError::not_found(format!(
+        return Err(AetherError::not_found(ctx, format!(
             "No threads found for PID {pid} (process may have exited)"
-        )));
+        ), None));
     }
 
     Ok(tids)
@@ -800,7 +817,8 @@ fn enumerate_thread_ids(pid: u32) -> std::result::Result<Vec<u32>, AetherError> 
 // ---------------------------------------------------------------------------
 
 async fn list_handles(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "list_handles");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
 
     let mut buffer_size: u32 = 0x100000; // 1 MB initial
     let mut retry_count = 0u8;
@@ -829,7 +847,7 @@ async fn list_handles(params: Value) -> std::result::Result<String, AetherError>
         }
 
         if status < 0 {
-            return Err(AetherError::win32(format!(
+            return Err(AetherError::win32(ctx, "NtQuerySystemInformation", format!(
                 "NtQuerySystemInformation returned NTSTATUS 0x{status:08X}"
             )));
         }
@@ -875,7 +893,7 @@ async fn list_handles(params: Value) -> std::result::Result<String, AetherError>
             "process_handles": handles.len(),
             "handles": handles,
         });
-        return serde_json::to_string(&output).map_err(AetherError::Serde);
+        return serde_json::to_string(&output).map_err(AetherError::from);
     }
 }
 
@@ -884,7 +902,8 @@ async fn list_handles(params: Value) -> std::result::Result<String, AetherError>
 // ---------------------------------------------------------------------------
 
 async fn list_modules(params: Value) -> std::result::Result<String, AetherError> {
-    let pid = get_u32(&params, "pid")?;
+    let ctx = ErrorContext::new("process_control", "list_modules");
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
 
     // SAFETY: CreateToolhelp32Snapshot with TH32CS_SNAPMODULE is read-only.
     let snapshot = unsafe {
@@ -894,7 +913,7 @@ async fn list_modules(params: Value) -> std::result::Result<String, AetherError>
         )
     }
     .map_err(|e| {
-        AetherError::win32(format!("CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, {pid}) failed: {e}"))
+        AetherError::win32(ctx.clone(), "CreateToolhelp32Snapshot", format!("CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, {pid}) failed: {e}"))
     })?;
 
     let mut entry = MODULEENTRY32W {
@@ -945,7 +964,7 @@ async fn list_modules(params: Value) -> std::result::Result<String, AetherError>
         "modules": modules,
         "count": modules.len(),
     });
-    serde_json::to_string(&output).map_err(AetherError::Serde)
+    serde_json::to_string(&output).map_err(AetherError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -953,17 +972,19 @@ async fn list_modules(params: Value) -> std::result::Result<String, AetherError>
 // ---------------------------------------------------------------------------
 
 async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("process_control", "inject_dll");
+
     // Feature gate check
     server
         .gates
-        .check(server.gates.dll_inject, "AETHER_DLL_INJECT")?;
+        .check(ctx.clone(), server.gates.dll_inject, "AETHER_DLL_INJECT")?;
 
-    check_force(&params)?;
+    check_force(ctx.clone(), &params)?;
     audit::log_forced("process_control", "inject_dll");
     audit::log_security("process_control", "inject_dll", "DLL injection requested");
 
-    let pid = get_u32(&params, "pid")?;
-    let dll_path = get_string(&params, "dll_path")?;
+    let pid = get_u32(ctx.clone(), &params, "pid")?;
+    let dll_path = get_string(ctx.clone(), &params, "dll_path")?;
     let dll_path_wide = wide_string(&dll_path);
     let dll_path_bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(
@@ -975,6 +996,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
 
     // Open target process with required access rights
     let handle = open_process(
+        ctx.clone(),
         pid,
         PROCESS_CREATE_THREAD
             | PROCESS_QUERY_INFORMATION
@@ -1000,7 +1022,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
         unsafe {
             let _ = CloseHandle(handle);
         }
-        return Err(AetherError::win32(format!(
+        return Err(AetherError::win32(ctx.clone(), "VirtualAllocEx", format!(
             "VirtualAllocEx({pid}) failed — returned null"
         )));
     }
@@ -1026,7 +1048,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
             VirtualFreeEx(handle, remote_mem, 0, MEM_RELEASE).ok();
             let _ = CloseHandle(handle);
         }
-        return Err(AetherError::win32(format!(
+        return Err(AetherError::win32(ctx.clone(), "NtWriteVirtualMemory", format!(
             "NtWriteVirtualMemory({pid}) failed (NTSTATUS=0x{write_status:08X}) — wrote {bytes_written}/{dll_path_byte_len} bytes"
         )));
     }
@@ -1035,7 +1057,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
     // SAFETY: GetModuleHandleW with a valid constant string. Returns HMODULE to kernel32
     // which is always loaded in every process.
     let kernel32 = unsafe { GetModuleHandleW(w!("kernel32")) }
-        .map_err(|e| AetherError::win32(format!("GetModuleHandleW(kernel32) failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "GetModuleHandleW", format!("GetModuleHandleW(kernel32) failed: {e}")))?;
 
     // SAFETY: GetProcAddress with valid HMODULE and constant function name.
     // LoadLibraryW is always exported by kernel32.
@@ -1044,7 +1066,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
     let load_library_addr: LPTHREAD_START_ROUTINE = unsafe {
         let farproc = GetProcAddress(kernel32, s!("LoadLibraryW"))
             .ok_or_else(|| {
-                AetherError::win32("GetProcAddress(LoadLibraryW) returned None".to_string())
+                AetherError::win32(ctx.clone(), "GetProcAddress", "GetProcAddress(LoadLibraryW) returned None".to_string())
             })?;
         // FARPROC and LPTHREAD_START_ROUTINE are both function pointers;
         // the signature mismatch is safe because LoadLibraryW's calling
@@ -1092,7 +1114,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
                 "status": "injected",
                 "note": "DLL loaded via CreateRemoteThread(LoadLibraryW). Remote memory intentionally not freed — it is released on process exit.",
             });
-            serde_json::to_string(&output).map_err(AetherError::Serde)
+            serde_json::to_string(&output).map_err(AetherError::from)
         }
         Err(e) => {
             // Clean up on failure
@@ -1101,7 +1123,7 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
                 VirtualFreeEx(handle, remote_mem, 0, MEM_RELEASE).ok();
                 let _ = CloseHandle(handle);
             }
-            Err(AetherError::win32(format!(
+            Err(AetherError::win32(ctx, "CreateRemoteThread", format!(
                 "CreateRemoteThread({pid}) failed: {e}"
             )))
         }
@@ -1113,16 +1135,16 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
 // ---------------------------------------------------------------------------
 
 /// Open a process with the requested access rights.
-fn open_process(pid: u32, access: PROCESS_ACCESS_RIGHTS) -> std::result::Result<HANDLE, AetherError> {
+fn open_process(ctx: ErrorContext, pid: u32, access: PROCESS_ACCESS_RIGHTS) -> std::result::Result<HANDLE, AetherError> {
     // SAFETY: pid is user-provided but validated. bInheritHandle is FALSE.
     // Returns NULL on failure, which the windows crate wraps as an Error.
     unsafe { OpenProcess(access, FALSE, pid) }
-        .map_err(|e| AetherError::win32(format!("OpenProcess({pid}) failed: {e}")))
+        .map_err(|e| AetherError::win32(ctx.clone(), "OpenProcess", format!("OpenProcess({pid}) failed: {e}")))
         .and_then(|h| {
             if h.is_invalid() {
-                Err(AetherError::not_found(format!(
+                Err(AetherError::not_found(ctx, format!(
                     "Process {pid} not found or access denied"
-                )))
+                ), None))
             } else {
                 Ok(h)
             }
@@ -1130,15 +1152,15 @@ fn open_process(pid: u32, access: PROCESS_ACCESS_RIGHTS) -> std::result::Result<
 }
 
 /// Open a thread with the requested access rights.
-fn open_thread(tid: u32, access: THREAD_ACCESS_RIGHTS) -> std::result::Result<HANDLE, AetherError> {
+fn open_thread(ctx: ErrorContext, tid: u32, access: THREAD_ACCESS_RIGHTS) -> std::result::Result<HANDLE, AetherError> {
     // SAFETY: tid is user-provided but validated. bInheritHandle is FALSE.
     unsafe { OpenThread(access, FALSE, tid) }
-        .map_err(|e| AetherError::win32(format!("OpenThread({tid}) failed: {e}")))
+        .map_err(|e| AetherError::win32(ctx.clone(), "OpenThread", format!("OpenThread({tid}) failed: {e}")))
         .and_then(|h| {
             if h.is_invalid() {
-                Err(AetherError::not_found(format!(
+                Err(AetherError::not_found(ctx, format!(
                     "Thread {tid} not found or access denied"
-                )))
+                ), None))
             } else {
                 Ok(h)
             }

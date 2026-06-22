@@ -4,7 +4,7 @@
 
 use std::env;
 
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 
 /// Central feature gate configuration loaded from environment variables.
 /// Each gate controls a dangerous or sensitive system operation.
@@ -46,11 +46,11 @@ impl FeatureGates {
     /// Used inside tool handlers before executing gated operations:
     ///
     /// ```ignore
-    /// self.gates.check(self.gates.dll_inject, "AETHER_DLL_INJECT")?;
+    /// self.gates.check(ErrorContext::new("process_control", "inject_dll"), self.gates.dll_inject, "AETHER_DLL_INJECT")?;
     /// ```
-    pub fn check(&self, enabled: bool, gate_name: &str) -> Result<(), AetherError> {
+    pub fn check(&self, ctx: ErrorContext, enabled: bool, gate_name: &str) -> Result<(), AetherError> {
         if !enabled {
-            return Err(AetherError::feature_disabled(gate_name));
+            return Err(AetherError::feature_disabled(ctx, gate_name));
         }
         Ok(())
     }

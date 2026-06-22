@@ -9,7 +9,7 @@
 //! Uses Win32 APIs with `std::process::Command` fallbacks.
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 
 use serde_json::{json, Value};
 use std::mem;
@@ -323,6 +323,7 @@ fn u32_to_ipv4(n: u32) -> String {
 // =======================================================================
 
 fn action_adapters() -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("network_manager", "adapters");
     unsafe {
         let family = AF_UNSPEC.0 as u32;
         let flags = GAA_FLAG_INCLUDE_PREFIX;
@@ -331,9 +332,7 @@ fn action_adapters() -> std::result::Result<String, AetherError> {
         let mut size: u32 = 0;
         let err = GetAdaptersAddresses(family, flags, None, None, &mut size);
         if err != ERROR_BUFFER_OVERFLOW.0 {
-            return Err(AetherError::Win32Error(format!(
-                "GetAdaptersAddresses sizing error {err}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "GetAdaptersAddresses sizing", format!("error {err}")));
         }
 
         let mut buf: Vec<u8> = vec![0u8; size as usize];
@@ -345,9 +344,7 @@ fn action_adapters() -> std::result::Result<String, AetherError> {
             &mut size,
         );
         if err != NO_ERROR.0 {
-            return Err(AetherError::Win32Error(format!(
-                "GetAdaptersAddresses error {err}"
-            )));
+            return Err(AetherError::win32(ctx.clone(), "GetAdaptersAddresses", format!("error {err}")));
         }
 
         let mut items = Vec::new();
@@ -1131,20 +1128,21 @@ fn action_bluetooth_devices() -> std::result::Result<String, AetherError> {
 // =======================================================================
 
 fn action_hosts_file(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("network_manager", "hosts_file");
     let path = Path::new(r"C:\Windows\System32\drivers\etc\hosts");
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if force {
         let content = params.get("content").and_then(|v| v.as_str())
-            .ok_or_else(|| AetherError::invalid_param("content field required for write"))?;
+            .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "content field required for write"))?;
         audit::log_forced("network", "hosts_write");
         std::fs::write(path, content.as_bytes())
-            .map_err(|e| AetherError::PermissionDenied(format!("Cannot write hosts: {e}")))?;
+            .map_err(|e| AetherError::permission_denied(ctx.clone(), format!("Cannot write hosts: {e}")))?;
         return Ok(json!({"status":"written","path":path.to_string_lossy()}).to_string());
     }
 
     let text = std::fs::read_to_string(path)
-        .map_err(|e| AetherError::NotFound(format!("hosts file: {e}")))?;
+        .map_err(|e| AetherError::not_found(ctx.clone(), format!("hosts file: {e}"), None))?;
 
     let mut entries = Vec::new();
     for line in text.lines() {
@@ -1176,17 +1174,18 @@ fn action_hosts_file(params: &Value) -> std::result::Result<String, AetherError>
 // =======================================================================
 
 fn action_network_shares(params: &Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("network_manager", "network_shares");
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // Create share
     if params.get("create_share").and_then(|v| v.as_bool()).unwrap_or(false) {
         if !force {
-            return Err(AetherError::invalid_param("force=true required to create share"));
+            return Err(AetherError::invalid_param(ctx.clone(), "force=true required to create share"));
         }
         let name = params.get("share_name").and_then(|v| v.as_str())
-            .ok_or_else(|| AetherError::invalid_param("share_name required"))?;
+            .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "share_name required"))?;
         let share_path = params.get("share_path").and_then(|v| v.as_str())
-            .ok_or_else(|| AetherError::invalid_param("share_path required"))?;
+            .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "share_path required"))?;
         audit::log_forced("network", "share_create");
         let out = run_cmd("net", &["share", name, "=", share_path])?;
         return Ok(json!({"status":"created","share_name":name,"output":out}).to_string());
@@ -1195,7 +1194,7 @@ fn action_network_shares(params: &Value) -> std::result::Result<String, AetherEr
     // Delete share
     if let Some(del) = params.get("delete_share").and_then(|v| v.as_str()) {
         if !force {
-            return Err(AetherError::invalid_param("force=true required to delete share"));
+            return Err(AetherError::invalid_param(ctx.clone(), "force=true required to delete share"));
         }
         audit::log_forced("network", "share_delete");
         let out = run_cmd("net", &["share", del, "/delete"])?;
@@ -1248,7 +1247,7 @@ pub fn handle_network_manager(action: &str, params: serde_json::Value) -> std::r
         "hosts_file" => action_hosts_file(&params),
         "network_shares" => action_network_shares(&params),
         _ => {
-            return Err(AetherError::InvalidParameter(format!(
+            return Err(AetherError::invalid_param(ErrorContext::new("network_manager", "unknown"), format!(
                 "Unknown network action: {action}. Valid: adapters, connections, dns_cache, firewall_rules, firewall_profiles, proxy, routing_table, network_stats, wifi_profiles, vpn_connections, bluetooth_devices, hosts_file, network_shares"
             )));
         }

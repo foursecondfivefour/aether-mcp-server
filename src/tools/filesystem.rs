@@ -15,7 +15,7 @@ use std::time::SystemTime;
 use serde_json::{json, Value};
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 
 // ---------------------------------------------------------------------------
 // Windows API imports (windows crate 0.58)
@@ -65,9 +65,12 @@ pub fn handle_file_system(action: &str, params: Value) -> std::result::Result<St
         "mount" => fs_mount(params),
         "unmount" => fs_unmount(params),
         "shares" => fs_shares(params),
-        _ => Err(AetherError::invalid_param(format!(
-            "Unknown filesystem action: {action}"
-        ))),
+        _ => {
+            let ctx = ErrorContext::new("file_system", "unknown");
+            Err(AetherError::invalid_param(ctx, format!(
+                "Unknown filesystem action: {action}"
+            )))
+        }
     }
 }
 
@@ -76,10 +79,11 @@ pub fn handle_file_system(action: &str, params: Value) -> std::result::Result<St
 // ===========================================================================
 
 fn fs_read(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "read");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx.clone(), &path_str)?;
     let content = fs::read_to_string(&path).map_err(|e| {
-        AetherError::Io(e)
+        AetherError::from(e)
     })?;
     audit::log_success(TOOL, "read", &format!("path={}", path.display()));
     Ok(content)
@@ -90,10 +94,11 @@ fn fs_read(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_write(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let content = get_str(&params, "content")?;
-    let path = canonicalize_path_for_write(&path_str)?;
-    fs::write(&path, &content).map_err(|e| AetherError::Io(e))?;
+    let ctx = ErrorContext::new("file_system", "write");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let content = get_str(ctx.clone(), &params, "content")?;
+    let path = canonicalize_path_for_write(ctx.clone(), &path_str)?;
+    fs::write(&path, &content).map_err(AetherError::from)?;
     audit::log_success(TOOL, "write", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
@@ -103,20 +108,21 @@ fn fs_write(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_delete(params: Value) -> std::result::Result<String, AetherError> {
-    let force = get_bool(&params, "force")?;
+    let ctx = ErrorContext::new("file_system", "delete");
+    let force = get_bool(ctx.clone(), &params, "force")?;
     if !force {
-        return Err(AetherError::invalid_param(
+        return Err(AetherError::permission_denied(ctx,
             "delete requires `force: true` to confirm destructive operation",
         ));
     }
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx.clone(), &path_str)?;
     audit::log_forced(TOOL, "delete");
 
     if path.is_dir() {
-        fs::remove_dir_all(&path).map_err(|e| AetherError::Io(e))?;
+        fs::remove_dir_all(&path).map_err(AetherError::from)?;
     } else {
-        fs::remove_file(&path).map_err(|e| AetherError::Io(e))?;
+        fs::remove_file(&path).map_err(AetherError::from)?;
     }
     audit::log_success(TOOL, "delete", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "deleted": path.to_string_lossy() }).to_string())
@@ -127,26 +133,28 @@ fn fs_delete(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_copy(params: Value) -> std::result::Result<String, AetherError> {
-    let source_str = get_str(&params, "source")?;
-    let dest_str = get_str(&params, "destination")?;
-    let source = canonicalize_path_required(&source_str)?;
-    let dest = canonicalize_path_for_write(&dest_str)?;
+    let ctx = ErrorContext::new("file_system", "copy");
+    let source_str = get_str(ctx.clone(), &params, "source")?;
+    let dest_str = get_str(ctx.clone(), &params, "destination")?;
+    let source = canonicalize_path_required(ctx.clone(), &source_str)?;
+    let dest = canonicalize_path_for_write(ctx.clone(), &dest_str)?;
 
     if source.is_dir() {
         copy_dir_recursive(&source, &dest)?;
     } else {
-        fs::copy(&source, &dest).map_err(|e| AetherError::Io(e))?;
+        fs::copy(&source, &dest).map_err(AetherError::from)?;
     }
     audit::log_success(TOOL, "copy", &format!("{} -> {}", source.display(), dest.display()));
     Ok(json!({ "ok": true, "source": source.to_string_lossy(), "destination": dest.to_string_lossy() }).to_string())
 }
 
 fn fs_move(params: Value) -> std::result::Result<String, AetherError> {
-    let source_str = get_str(&params, "source")?;
-    let dest_str = get_str(&params, "destination")?;
-    let source = canonicalize_path_required(&source_str)?;
-    let dest = canonicalize_path_for_write(&dest_str)?;
-    fs::rename(&source, &dest).map_err(|e| AetherError::Io(e))?;
+    let ctx = ErrorContext::new("file_system", "move");
+    let source_str = get_str(ctx.clone(), &params, "source")?;
+    let dest_str = get_str(ctx.clone(), &params, "destination")?;
+    let source = canonicalize_path_required(ctx.clone(), &source_str)?;
+    let dest = canonicalize_path_for_write(ctx.clone(), &dest_str)?;
+    fs::rename(&source, &dest).map_err(AetherError::from)?;
     audit::log_success(TOOL, "move", &format!("{} -> {}", source.display(), dest.display()));
     Ok(json!({ "ok": true, "source": source.to_string_lossy(), "destination": dest.to_string_lossy() }).to_string())
 }
@@ -173,11 +181,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
 // ===========================================================================
 
 fn fs_list_dir(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
+    let ctx = ErrorContext::new("file_system", "list_dir");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
     let mask = get_str_optional(&params, "mask");
-    let path = canonicalize_path_required(&path_str)?;
+    let path = canonicalize_path_required(ctx.clone(), &path_str)?;
     if !path.is_dir() {
-        return Err(AetherError::invalid_param(format!(
+        return Err(AetherError::invalid_param(ctx, format!(
             "Not a directory: {}",
             path.display()
         )));
@@ -243,9 +252,10 @@ fn dir_entry_to_json(entry: &fs::DirEntry) -> Value {
 // ===========================================================================
 
 fn fs_stat(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
-    let metadata = fs::metadata(&path).map_err(|e| AetherError::Io(e))?;
+    let ctx = ErrorContext::new("file_system", "stat");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx.clone(), &path_str)?;
+    let metadata = fs::metadata(&path).map_err(AetherError::from)?;
 
     let size = metadata.len();
     let is_dir = metadata.is_dir();
@@ -286,9 +296,10 @@ fn fs_stat(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_mkdir(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_for_write(&path_str)?;
-    fs::create_dir_all(&path).map_err(|e| AetherError::Io(e))?;
+    let ctx = ErrorContext::new("file_system", "mkdir");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_for_write(ctx.clone(), &path_str)?;
+    fs::create_dir_all(&path).map_err(AetherError::from)?;
     audit::log_success(TOOL, "mkdir", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
@@ -298,8 +309,9 @@ fn fs_mkdir(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_acl_get(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "acl_get");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx.clone(), &path_str)?;
     let path_display = path.to_string_lossy().to_string();
     let output = Command::new("icacls")
         .arg(&path_display)
@@ -356,10 +368,11 @@ fn parse_icacls_output(output: &str) -> Value {
 // ===========================================================================
 
 fn fs_acl_set(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let user = get_str(&params, "user")?;
-    let permissions = get_str(&params, "permissions")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "acl_set");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let user = get_str(ctx.clone(), &params, "user")?;
+    let permissions = get_str(ctx.clone(), &params, "permissions")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let grant = format!("{}:{}", user, permissions);
     let output = Command::new("icacls")
         .arg(path.to_string_lossy().as_ref())
@@ -380,11 +393,12 @@ fn fs_acl_set(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
-    let link_str = get_str(&params, "link_path")?;
-    let target_str = get_str(&params, "target_path")?;
+    let ctx = ErrorContext::new("file_system", "symlink");
+    let link_str = get_str(ctx.clone(), &params, "link_path")?;
+    let target_str = get_str(ctx.clone(), &params, "target_path")?;
     let link_type = get_str_optional(&params, "link_type").unwrap_or_else(|| "symbolic".into());
 
-    let link = canonicalize_path_for_write(&link_str)?;
+    let link = canonicalize_path_for_write(ctx.clone(), &link_str)?;
     let target = PathBuf::from(&target_str); // target may be relative — keep as-is
 
     match link_type.as_str() {
@@ -398,14 +412,14 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
             };
             if is_dir {
                 std::os::windows::fs::symlink_dir(&target, &link)
-                    .map_err(|e| AetherError::Io(e))?;
+                    .map_err(AetherError::from)?;
             } else {
                 std::os::windows::fs::symlink_file(&target, &link)
-                    .map_err(|e| AetherError::Io(e))?;
+                    .map_err(AetherError::from)?;
             }
         }
         "hard" => {
-            fs::hard_link(&target, &link).map_err(|e| AetherError::Io(e))?;
+            fs::hard_link(&target, &link).map_err(AetherError::from)?;
         }
         "junction" => {
             // Junction requires mklink /J via cmd.exe (cmd built-in)
@@ -425,7 +439,7 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
             }
         }
         other => {
-            return Err(AetherError::invalid_param(format!(
+            return Err(AetherError::invalid_param(ctx, format!(
                 "Unknown link_type '{other}'. Use: symbolic, hard, junction"
             )));
         }
@@ -444,8 +458,9 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_ads_list(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "ads_list");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let output = Command::new("cmd")
         .args(["/c", "dir", "/R", &path.to_string_lossy()])
         .output()
@@ -491,9 +506,10 @@ fn parse_ads_list_output(output: &str) -> Value {
 }
 
 fn fs_ads_read(params: Value) -> std::result::Result<String, AetherError> {
-    let base_path_str = get_str(&params, "path")?;
-    let stream_name = get_str(&params, "stream_name")?;
-    let base_path = canonicalize_path_required(&base_path_str)?;
+    let ctx = ErrorContext::new("file_system", "ads_read");
+    let base_path_str = get_str(ctx.clone(), &params, "path")?;
+    let stream_name = get_str(ctx.clone(), &params, "stream_name")?;
+    let base_path = canonicalize_path_required(ctx.clone(), &base_path_str)?;
     let ads_path = format!("{}:{}", base_path.display(), stream_name);
     // ADS paths don't canonicalize directly; try to read directly
     let content = fs::read_to_string(&ads_path).map_err(|e| {
@@ -504,23 +520,25 @@ fn fs_ads_read(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 fn fs_ads_write(params: Value) -> std::result::Result<String, AetherError> {
-    let base_path_str = get_str(&params, "path")?;
-    let stream_name = get_str(&params, "stream_name")?;
-    let content = get_str(&params, "content")?;
-    let base_path = canonicalize_path_required(&base_path_str)?;
+    let ctx = ErrorContext::new("file_system", "ads_write");
+    let base_path_str = get_str(ctx.clone(), &params, "path")?;
+    let stream_name = get_str(ctx.clone(), &params, "stream_name")?;
+    let content = get_str(ctx.clone(), &params, "content")?;
+    let base_path = canonicalize_path_required(ctx, &base_path_str)?;
     let ads_path = format!("{}:{}", base_path.display(), stream_name);
-    fs::write(&ads_path, &content).map_err(|e| AetherError::Io(e))?;
+    fs::write(&ads_path, &content).map_err(AetherError::from)?;
     audit::log_success(TOOL, "ads_write", &format!("path={ads_path}"));
     Ok(json!({ "ok": true, "path": ads_path }).to_string())
 }
 
 fn fs_ads_delete(params: Value) -> std::result::Result<String, AetherError> {
-    let base_path_str = get_str(&params, "path")?;
-    let stream_name = get_str(&params, "stream_name")?;
-    let base_path = canonicalize_path_required(&base_path_str)?;
+    let ctx = ErrorContext::new("file_system", "ads_delete");
+    let base_path_str = get_str(ctx.clone(), &params, "path")?;
+    let stream_name = get_str(ctx.clone(), &params, "stream_name")?;
+    let base_path = canonicalize_path_required(ctx, &base_path_str)?;
     let ads_path = format!("{}:{}", base_path.display(), stream_name);
     // Writing empty deletes the ADS on Windows
-    fs::write(&ads_path, b"").map_err(|e| AetherError::Io(e))?;
+    fs::write(&ads_path, b"").map_err(AetherError::from)?;
     audit::log_success(TOOL, "ads_delete", &format!("path={ads_path}"));
     Ok(json!({ "ok": true, "deleted": ads_path }).to_string())
 }
@@ -530,8 +548,9 @@ fn fs_ads_delete(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_compress(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "compress");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let output = Command::new("compact")
         .args(["/C", &path.to_string_lossy()])
         .output()
@@ -546,8 +565,9 @@ fn fs_compress(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 fn fs_uncompress(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "uncompress");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let output = Command::new("compact")
         .args(["/U", &path.to_string_lossy()])
         .output()
@@ -566,8 +586,9 @@ fn fs_uncompress(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_encrypt(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "encrypt");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let output = Command::new("cipher")
         .args(["/E", &path.to_string_lossy()])
         .output()
@@ -582,8 +603,9 @@ fn fs_encrypt(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 fn fs_decrypt(params: Value) -> std::result::Result<String, AetherError> {
-    let path_str = get_str(&params, "path")?;
-    let path = canonicalize_path_required(&path_str)?;
+    let ctx = ErrorContext::new("file_system", "decrypt");
+    let path_str = get_str(ctx.clone(), &params, "path")?;
+    let path = canonicalize_path_required(ctx, &path_str)?;
     let output = Command::new("cipher")
         .args(["/D", &path.to_string_lossy()])
         .output()
@@ -602,9 +624,10 @@ fn fs_decrypt(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_volumes() -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("file_system", "volumes");
     let drives_bitmask = unsafe { GetLogicalDrives() };
     if drives_bitmask == 0 {
-        return Err(AetherError::win32("GetLogicalDrives returned 0"));
+        return Err(AetherError::win32(ctx, "GetLogicalDrives", "GetLogicalDrives returned 0"));
     }
 
     let mut volumes: Vec<Value> = Vec::new();
@@ -696,15 +719,16 @@ fn get_disk_free_space(root: &str) -> (u64, u64, u64) {
 // ===========================================================================
 
 fn fs_mount(params: Value) -> std::result::Result<String, AetherError> {
-    let volume_guid = get_str(&params, "volume_guid")?;
-    let mount_point_str = get_str(&params, "mount_point")?;
+    let ctx = ErrorContext::new("file_system", "mount");
+    let volume_guid = get_str(ctx.clone(), &params, "volume_guid")?;
+    let mount_point_str = get_str(ctx.clone(), &params, "mount_point")?;
 
     let mount_path = PathBuf::from(&mount_point_str);
     // Mount point must be an existing empty directory
     if !mount_path.exists() {
-        fs::create_dir_all(&mount_path).map_err(|e| AetherError::Io(e))?;
+        fs::create_dir_all(&mount_path).map_err(AetherError::from)?;
     }
-    let mount_path_canon = canonicalize_path_required(&mount_point_str)?;
+    let mount_path_canon = canonicalize_path_required(ctx.clone(), &mount_point_str)?;
 
     let h_volume = HSTRING::from(volume_guid.as_str());
     let mount_str = mount_path_canon.to_string_lossy();
@@ -718,7 +742,7 @@ fn fs_mount(params: Value) -> std::result::Result<String, AetherError> {
 
     let result = unsafe { SetVolumeMountPointW(&h_mount, &h_volume) };
     if result.is_err() {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "SetVolumeMountPointW", format!(
             "SetVolumeMountPointW failed for volume {volume_guid} at {mount_with_slash}"
         )));
     }
@@ -727,8 +751,9 @@ fn fs_mount(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 fn fs_unmount(params: Value) -> std::result::Result<String, AetherError> {
-    let mount_point_str = get_str(&params, "mount_point")?;
-    let mount_path = canonicalize_path_required(&mount_point_str)?;
+    let ctx = ErrorContext::new("file_system", "unmount");
+    let mount_point_str = get_str(ctx.clone(), &params, "mount_point")?;
+    let mount_path = canonicalize_path_required(ctx.clone(), &mount_point_str)?;
     let mount_str = mount_path.to_string_lossy();
     let mount_with_slash = if mount_str.ends_with('\\') {
         mount_str.to_string()
@@ -739,7 +764,7 @@ fn fs_unmount(params: Value) -> std::result::Result<String, AetherError> {
 
     let result = unsafe { DeleteVolumeMountPointW(&h_mount) };
     if result.is_err() {
-        return Err(AetherError::Win32Error(format!(
+        return Err(AetherError::win32(ctx, "DeleteVolumeMountPointW", format!(
             "DeleteVolumeMountPointW failed for {mount_with_slash}"
         )));
     }
@@ -752,19 +777,20 @@ fn fs_unmount(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 fn fs_shares(params: Value) -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("file_system", "shares");
     let share_action = get_str_optional(&params, "share_action").unwrap_or_else(|| "list".into());
 
     match share_action.as_str() {
-        "list" => shares_list(),
-        "create" => shares_create(params),
-        "delete" => shares_delete(params),
-        other => Err(AetherError::invalid_param(format!(
+        "list" => shares_list(ctx.clone()),
+        "create" => shares_create(ctx.clone(), params),
+        "delete" => shares_delete(ctx.clone(), params),
+        other => Err(AetherError::invalid_param(ctx, format!(
             "Unknown share_action '{other}'. Use: list, create, delete"
         ))),
     }
 }
 
-fn shares_list() -> std::result::Result<String, AetherError> {
+fn shares_list(_ctx: ErrorContext) -> std::result::Result<String, AetherError> {
     let output = Command::new("net")
         .arg("share")
         .output()
@@ -828,9 +854,9 @@ fn parse_net_share_output(output: &str) -> Value {
     json!(shares)
 }
 
-fn shares_create(params: Value) -> std::result::Result<String, AetherError> {
-    let name = get_str(&params, "name")?;
-    let share_path = get_str(&params, "share_path")?;
+fn shares_create(ctx: ErrorContext, params: Value) -> std::result::Result<String, AetherError> {
+    let name = get_str(ctx.clone(), &params, "name")?;
+    let share_path = get_str(ctx.clone(), &params, "share_path")?;
     let share_spec = format!("{name}={share_path}");
     let output = Command::new("net")
         .args(["share", &share_spec])
@@ -845,8 +871,8 @@ fn shares_create(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "name": name, "share_path": share_path }).to_string())
 }
 
-fn shares_delete(params: Value) -> std::result::Result<String, AetherError> {
-    let name = get_str(&params, "name")?;
+fn shares_delete(ctx: ErrorContext, params: Value) -> std::result::Result<String, AetherError> {
+    let name = get_str(ctx.clone(), &params, "name")?;
     let output = Command::new("net")
         .args(["share", &name, "/delete"])
         .output()
@@ -865,15 +891,15 @@ fn shares_delete(params: Value) -> std::result::Result<String, AetherError> {
 // ===========================================================================
 
 /// Canonicalize a path that MUST exist (read, stat, acl_get, etc.).
-fn canonicalize_path_required(path_str: &str) -> std::result::Result<PathBuf, AetherError> {
+fn canonicalize_path_required(ctx: ErrorContext, path_str: &str) -> std::result::Result<PathBuf, AetherError> {
     fs::canonicalize(path_str).map_err(|e| {
-        AetherError::NotFound(format!("Path not found or inaccessible: {path_str}: {e}"))
+        AetherError::not_found(ctx, format!("Path not found or inaccessible: {path_str}: {e}"), None)
     })
 }
 
 /// Canonicalize a path for write/create operations. If the path doesn't exist
 /// yet, canonicalizes the parent and appends the filename.
-fn canonicalize_path_for_write(path_str: &str) -> std::result::Result<PathBuf, AetherError> {
+fn canonicalize_path_for_write(ctx: ErrorContext, path_str: &str) -> std::result::Result<PathBuf, AetherError> {
     let path = Path::new(path_str);
     match fs::canonicalize(path) {
         Ok(p) => Ok(p),
@@ -882,29 +908,29 @@ fn canonicalize_path_for_write(path_str: &str) -> std::result::Result<PathBuf, A
             if let Some(parent) = path.parent() {
                 if parent.as_os_str().is_empty() {
                     let cwd =
-                        std::env::current_dir().map_err(|e| AetherError::Io(e))?;
+                        std::env::current_dir().map_err(AetherError::from)?;
                     return Ok(cwd.join(path.file_name().unwrap_or_default()));
                 }
                 let parent_canon = fs::canonicalize(parent).map_err(|e| {
-                    AetherError::NotFound(format!("Parent directory not found: {parent:?}: {e}"))
+                    AetherError::not_found(ctx.clone(), format!("Parent directory not found: {parent:?}: {e}"), None)
                 })?;
                 Ok(parent_canon.join(path.file_name().unwrap_or_default()))
             } else {
-                fs::canonicalize(path).map_err(|e| AetherError::NotFound(format!(
+                fs::canonicalize(path).map_err(|e| AetherError::not_found(ctx, format!(
                     "Path not found and has no parent: {path_str}: {e}"
-                )))
+                ), None))
             }
         }
     }
 }
 
 /// Extract a required string parameter from the JSON object.
-fn get_str(params: &Value, key: &str) -> std::result::Result<String, AetherError> {
+fn get_str(ctx: ErrorContext, params: &Value, key: &str) -> std::result::Result<String, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_str())
         .map(String::from)
-        .ok_or_else(|| AetherError::invalid_param(format!("Missing or invalid parameter: '{key}'")))
+        .ok_or_else(|| AetherError::invalid_param(ctx, format!("Missing or invalid parameter: '{key}'")))
 }
 
 /// Extract an optional string parameter from the JSON object.
@@ -913,11 +939,11 @@ fn get_str_optional(params: &Value, key: &str) -> Option<String> {
 }
 
 /// Extract a required boolean parameter from the JSON object.
-fn get_bool(params: &Value, key: &str) -> std::result::Result<bool, AetherError> {
+fn get_bool(ctx: ErrorContext, params: &Value, key: &str) -> std::result::Result<bool, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_bool())
-        .ok_or_else(|| AetherError::invalid_param(format!("Missing or invalid boolean: '{key}'")))
+        .ok_or_else(|| AetherError::invalid_param(ctx, format!("Missing or invalid boolean: '{key}'")))
 }
 
 /// Simple glob pattern matching supporting `*` (any sequence) and `?` (single char).

@@ -16,7 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audit;
-use crate::error::AetherError;
+use crate::error::{AetherError, ErrorContext};
 use serde_json::json;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::System::Services::*;
@@ -65,42 +65,44 @@ pub fn handle_service_manager(
     action: &str,
     params: serde_json::Value,
 ) -> std::result::Result<String, AetherError> {
+    let action_static: &'static str = Box::leak(action.to_string().into_boxed_str());
+    let ctx = ErrorContext::new("service_manager", action_static);
     match action {
         "list" => list_services(),
         "start" => {
-            let name = required_str(&params, "service_name")?;
+            let name = required_str(&ctx, &params, "service_name")?;
             let force = optional_bool(&params, "force");
-            start_service(&name, force)
+            start_service(&ctx, &name, force)
         }
         "stop" => {
-            let name = required_str(&params, "service_name")?;
+            let name = required_str(&ctx, &params, "service_name")?;
             let force = optional_bool(&params, "force");
-            stop_service(&name, force)
+            stop_service(&ctx, &name, force)
         }
         "restart" => {
-            let name = required_str(&params, "service_name")?;
+            let name = required_str(&ctx, &params, "service_name")?;
             let force = optional_bool(&params, "force");
-            restart_service(&name, force)
+            restart_service(&ctx, &name, force)
         }
         "query_config" => {
-            let name = required_str(&params, "service_name")?;
-            query_service_config(&name)
+            let name = required_str(&ctx, &params, "service_name")?;
+            query_service_config(&ctx, &name)
         }
         "query_status" => {
-            let name = required_str(&params, "service_name")?;
-            query_service_status(&name)
+            let name = required_str(&ctx, &params, "service_name")?;
+            query_service_status(&ctx, &name)
         }
         "set_startup" => {
-            let name = required_str(&params, "service_name")?;
-            let startup = required_str(&params, "startup_type")?;
+            let name = required_str(&ctx, &params, "service_name")?;
+            let startup = required_str(&ctx, &params, "startup_type")?;
             let force = optional_bool(&params, "force");
-            set_startup_type(&name, &startup, force)
+            set_startup_type(&ctx, &name, &startup, force)
         }
         "drivers" => {
             let filter = optional_str(&params, "filter");
-            list_drivers(filter.as_deref())
+            list_drivers(&ctx, filter.as_deref())
         }
-        _ => Err(AetherError::invalid_param(format!(
+        _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown service action: {action}. Valid: list, start, stop, restart, query_config, query_status, set_startup, drivers"
         ))),
     }
@@ -110,12 +112,12 @@ pub fn handle_service_manager(
 // JSON parameter helpers
 // ---------------------------------------------------------------------------
 
-fn required_str(params: &serde_json::Value, key: &str) -> std::result::Result<String, AetherError> {
+fn required_str(ctx: &ErrorContext, params: &serde_json::Value, key: &str) -> std::result::Result<String, AetherError> {
     params
         .get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AetherError::invalid_param(format!("Missing or invalid parameter: '{key}'")))
+        .ok_or_else(|| AetherError::invalid_param(ctx.clone(), format!("Missing or invalid parameter: '{key}'")))
 }
 
 fn optional_str(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -192,14 +194,14 @@ fn error_control_to_string(ec: SERVICE_ERROR) -> &'static str {
     }
 }
 
-fn parse_start_type(raw: &str) -> std::result::Result<SERVICE_START_TYPE, AetherError> {
+fn parse_start_type(ctx: &ErrorContext, raw: &str) -> std::result::Result<SERVICE_START_TYPE, AetherError> {
     match raw {
         "boot" => Ok(SERVICE_BOOT_START),
         "system" => Ok(SERVICE_SYSTEM_START),
         "auto" => Ok(SERVICE_AUTO_START),
         "demand" => Ok(SERVICE_DEMAND_START),
         "disabled" => Ok(SERVICE_DISABLED),
-        _ => Err(AetherError::invalid_param(format!(
+        _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Invalid startup_type: '{raw}'. Valid: boot, system, auto, demand, disabled"
         ))),
     }
@@ -210,11 +212,11 @@ fn parse_start_type(raw: &str) -> std::result::Result<SERVICE_START_TYPE, Aether
 // ---------------------------------------------------------------------------
 
 /// Open the Service Control Manager with the requested access mask.
-unsafe fn open_scm(access: u32) -> std::result::Result<SC_HANDLE, AetherError> {
+unsafe fn open_scm(ctx: &ErrorContext, access: u32) -> std::result::Result<SC_HANDLE, AetherError> {
     // SAFETY: null pointers for machine/database → local machine, default db.
     unsafe {
         OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), access)
-            .map_err(|e| AetherError::win32(format!("OpenSCManagerW failed: {e}")))
+            .map_err(|e| AetherError::win32(ctx.clone(), "OpenSCManagerW", e))
     }
 }
 
@@ -222,6 +224,7 @@ unsafe fn open_scm(access: u32) -> std::result::Result<SC_HANDLE, AetherError> {
 ///
 /// The caller must close the returned handle with `CloseServiceHandle`.
 unsafe fn open_svc(
+    ctx: &ErrorContext,
     scm: SC_HANDLE,
     name: &str,
     access: u32,
@@ -229,8 +232,9 @@ unsafe fn open_svc(
     let wide = to_wide(name);
     // SAFETY: `wide` is a null-terminated UTF-16 copy of `name`.
     unsafe {
-        OpenServiceW(scm, PCWSTR::from_raw(wide.as_ptr()), access).map_err(|e| {
-            AetherError::not_found(format!("Service '{name}' not found or access denied: {e}"))
+        OpenServiceW(scm, PCWSTR::from_raw(wide.as_ptr()), access).map_err(|_e| {
+            let _ = _e;
+            AetherError::not_found(ctx.clone(), format!("Service '{name}' not found or access denied"), None)
         })
     }
 }
@@ -244,6 +248,7 @@ unsafe fn open_svc(
 ///
 /// Returns the final `SERVICE_STATUS_PROCESS` on success.
 unsafe fn wait_for_state(
+    ctx: &ErrorContext,
     svc: SC_HANDLE,
     desired_state: SERVICE_STATUS_CURRENT_STATE,
     name: &str,
@@ -268,7 +273,7 @@ unsafe fn wait_for_state(
                 &mut needed,
             )
         }
-        .map_err(|e| AetherError::win32(format!("QueryServiceStatusEx failed: {e}")))?;
+        .map_err(|e| AetherError::win32(ctx.clone(), "QueryServiceStatusEx", e))?;
 
         if status.dwCurrentState == desired_state {
             return Ok(status);
@@ -292,10 +297,11 @@ unsafe fn wait_for_state(
 /// Query the startup type for a single service by name.
 /// The SCM handle must already be open.
 unsafe fn query_startup_type(
+    ctx: &ErrorContext,
     scm: SC_HANDLE,
     service_name: &str,
 ) -> std::result::Result<SERVICE_START_TYPE, AetherError> {
-    let svc = unsafe { open_svc(scm, service_name, SERVICE_QUERY_CONFIG) }?;
+    let svc = unsafe { open_svc(ctx, scm, service_name, SERVICE_QUERY_CONFIG) }?;
 
     let mut needed: u32 = 0;
     let _ = unsafe { QueryServiceConfigW(svc, None, 0, &mut needed) };
@@ -307,9 +313,7 @@ unsafe fn query_startup_type(
     let _ = unsafe { CloseServiceHandle(svc) };
 
     result.map_err(|e| {
-        AetherError::win32(format!(
-            "QueryServiceConfigW failed for '{service_name}': {e}"
-        ))
+        AetherError::win32(ctx.clone(), "QueryServiceConfigW", e)
     })?;
 
     // SAFETY: the OS filled `buffer` with a valid `QUERY_SERVICE_CONFIGW`.
@@ -318,8 +322,9 @@ unsafe fn query_startup_type(
 }
 
 fn list_services() -> std::result::Result<String, AetherError> {
+    let ctx = ErrorContext::new("service_manager", "list");
     let scm =
-        unsafe { open_scm(SC_MANAGER_ENUMERATE_SERVICE) }.map_err(|e| {
+        unsafe { open_scm(&ctx, SC_MANAGER_ENUMERATE_SERVICE) }.map_err(|e| {
             audit::log_failure("service", "list", &e.to_string());
             e
         })?;
@@ -385,7 +390,7 @@ fn list_services() -> std::result::Result<String, AetherError> {
                 let items: Vec<serde_json::Value> = entries
                     .iter()
                     .map(|e| {
-                        let startup = unsafe { query_startup_type(scm, &e.name) }
+                        let startup = unsafe { query_startup_type(&ctx, scm, &e.name) }
                             .map(|t| start_type_to_string(t))
                             .unwrap_or("unknown");
 
@@ -411,9 +416,11 @@ fn list_services() -> std::result::Result<String, AetherError> {
                     continue;
                 }
                 let _ = unsafe { CloseServiceHandle(scm) };
-                let err = AetherError::win32(format!(
-                    "EnumServicesStatusExW failed after {attempt} retries"
-                ));
+                let err = AetherError::win32(
+                    ctx.clone(),
+                    "EnumServicesStatusExW",
+                    format!("failed after {attempt} retries"),
+                );
                 audit::log_failure("service", "list", &err.to_string());
                 return Err(err);
             }
@@ -425,20 +432,21 @@ fn list_services() -> std::result::Result<String, AetherError> {
 // Action: start
 // ---------------------------------------------------------------------------
 
-fn start_service(name: &str, force: bool) -> std::result::Result<String, AetherError> {
+fn start_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
         audit::log_security("service", "start", "force not provided");
         return Err(AetherError::permission_denied(
+            ctx.clone(),
             "Starting a service requires force: true",
         ));
     }
 
-    let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }.map_err(|e| {
+    let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
         audit::log_failure("service", "start", &e.to_string());
         e
     })?;
 
-    let svc = unsafe { open_svc(scm, name, SERVICE_START) };
+    let svc = unsafe { open_svc(ctx, scm, name, SERVICE_START) };
     let _ = unsafe { CloseServiceHandle(scm) };
 
     let svc = match svc {
@@ -452,13 +460,13 @@ fn start_service(name: &str, force: bool) -> std::result::Result<String, AetherE
     // Start the service (no arguments).
     if let Err(e) = unsafe { StartServiceW(svc, None) } {
         let _ = unsafe { CloseServiceHandle(svc) };
-        let err = AetherError::win32(format!("StartServiceW failed for '{name}': {e}"));
+        let err = AetherError::win32(ctx.clone(), "StartServiceW", e);
         audit::log_failure("service", "start", &err.to_string());
         return Err(err);
     }
 
     // Wait for SERVICE_RUNNING.
-    let final_status = match unsafe { wait_for_state(svc, SERVICE_RUNNING, name) } {
+    let final_status = match unsafe { wait_for_state(ctx, svc, SERVICE_RUNNING, name) } {
         Ok(s) => s,
         Err(e) => {
             let _ = unsafe { CloseServiceHandle(svc) };
@@ -484,20 +492,21 @@ fn start_service(name: &str, force: bool) -> std::result::Result<String, AetherE
 // Action: stop
 // ---------------------------------------------------------------------------
 
-fn stop_service(name: &str, force: bool) -> std::result::Result<String, AetherError> {
+fn stop_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
         audit::log_security("service", "stop", "force not provided");
         return Err(AetherError::permission_denied(
+            ctx.clone(),
             "Stopping a service requires force: true",
         ));
     }
 
-    let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }.map_err(|e| {
+    let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
         audit::log_failure("service", "stop", &e.to_string());
         e
     })?;
 
-    let svc = unsafe { open_svc(scm, name, SERVICE_STOP) };
+    let svc = unsafe { open_svc(ctx, scm, name, SERVICE_STOP) };
     let _ = unsafe { CloseServiceHandle(scm) };
 
     let svc = match svc {
@@ -513,13 +522,13 @@ fn stop_service(name: &str, force: bool) -> std::result::Result<String, AetherEr
     // SAFETY: `ss` is a stack-allocated `SERVICE_STATUS`.
     if let Err(e) = unsafe { ControlService(svc, SERVICE_CONTROL_STOP, &mut ss) } {
         let _ = unsafe { CloseServiceHandle(svc) };
-        let err = AetherError::win32(format!("ControlService(STOP) failed for '{name}': {e}"));
+        let err = AetherError::win32(ctx.clone(), "ControlService(STOP)", e);
         audit::log_failure("service", "stop", &err.to_string());
         return Err(err);
     }
 
     // Wait for SERVICE_STOPPED.
-    let final_status = match unsafe { wait_for_state(svc, SERVICE_STOPPED, name) } {
+    let final_status = match unsafe { wait_for_state(ctx, svc, SERVICE_STOPPED, name) } {
         Ok(s) => s,
         Err(e) => {
             let _ = unsafe { CloseServiceHandle(svc) };
@@ -544,18 +553,19 @@ fn stop_service(name: &str, force: bool) -> std::result::Result<String, AetherEr
 // Action: restart
 // ---------------------------------------------------------------------------
 
-fn restart_service(name: &str, force: bool) -> std::result::Result<String, AetherError> {
+fn restart_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
         audit::log_security("service", "restart", "force not provided");
         return Err(AetherError::permission_denied(
+            ctx.clone(),
             "Restarting a service requires force: true",
         ));
     }
 
     // --- Stop phase ---
     {
-        let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }?;
-        let svc = unsafe { open_svc(scm, name, SERVICE_STOP) };
+        let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }?;
+        let svc = unsafe { open_svc(ctx, scm, name, SERVICE_STOP) };
         let _ = unsafe { CloseServiceHandle(scm) };
 
         let svc = match svc {
@@ -564,9 +574,7 @@ fn restart_service(name: &str, force: bool) -> std::result::Result<String, Aethe
                 // Service might not exist or already be stopped; we'll
                 // try the start phase regardless.
                 // Only fail if we cannot open at all.
-                return Err(AetherError::not_found(format!(
-                    "Service '{name}' not found"
-                )));
+                return Err(AetherError::not_found(ctx.clone(), format!("Service '{name}' not found"), None));
             }
         };
 
@@ -575,7 +583,7 @@ fn restart_service(name: &str, force: bool) -> std::result::Result<String, Aethe
         let _ = unsafe { ControlService(svc, SERVICE_CONTROL_STOP, &mut ss) };
 
         // Wait for stopped.
-        let _ = unsafe { wait_for_state(svc, SERVICE_STOPPED, name) };
+        let _ = unsafe { wait_for_state(ctx, svc, SERVICE_STOPPED, name) };
         let _ = unsafe { CloseServiceHandle(svc) };
     } // svc handle closed
 
@@ -584,8 +592,8 @@ fn restart_service(name: &str, force: bool) -> std::result::Result<String, Aethe
 
     // --- Start phase ---
     {
-        let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }?;
-        let svc = unsafe { open_svc(scm, name, SERVICE_START) };
+        let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }?;
+        let svc = unsafe { open_svc(ctx, scm, name, SERVICE_START) };
         let _ = unsafe { CloseServiceHandle(scm) };
 
         let svc = svc.map_err(|e| {
@@ -595,12 +603,12 @@ fn restart_service(name: &str, force: bool) -> std::result::Result<String, Aethe
 
         if let Err(e) = unsafe { StartServiceW(svc, None) } {
             let _ = unsafe { CloseServiceHandle(svc) };
-            let err = AetherError::win32(format!("StartServiceW failed for '{name}': {e}"));
+            let err = AetherError::win32(ctx.clone(), "StartServiceW", e);
             audit::log_failure("service", "restart", &err.to_string());
             return Err(err);
         }
 
-        let final_status = unsafe { wait_for_state(svc, SERVICE_RUNNING, name) }
+        let final_status = unsafe { wait_for_state(ctx, svc, SERVICE_RUNNING, name) }
             .map_err(|e| {
                 let _ = unsafe { CloseServiceHandle(svc) };
                 audit::log_failure("service", "restart", &e.to_string());
@@ -625,13 +633,13 @@ fn restart_service(name: &str, force: bool) -> std::result::Result<String, Aethe
 // Action: query_config
 // ---------------------------------------------------------------------------
 
-fn query_service_config(name: &str) -> std::result::Result<String, AetherError> {
-    let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }.map_err(|e| {
+fn query_service_config(ctx: &ErrorContext, name: &str) -> std::result::Result<String, AetherError> {
+    let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
         audit::log_failure("service", "query_config", &e.to_string());
         e
     })?;
 
-    let svc = unsafe { open_svc(scm, name, SERVICE_QUERY_CONFIG) };
+    let svc = unsafe { open_svc(ctx, scm, name, SERVICE_QUERY_CONFIG) };
     let _ = unsafe { CloseServiceHandle(scm) };
 
     let svc = match svc {
@@ -653,7 +661,7 @@ fn query_service_config(name: &str) -> std::result::Result<String, AetherError> 
     unsafe { QueryServiceConfigW(svc, Some(config_ptr), needed, &mut needed) }.map_err(
         |e| {
             let _ = unsafe { CloseServiceHandle(svc) };
-            let err = AetherError::win32(format!("QueryServiceConfigW failed: {e}"));
+            let err = AetherError::win32(ctx.clone(), "QueryServiceConfigW", e);
             audit::log_failure("service", "query_config", &err.to_string());
             err
         },
@@ -687,13 +695,13 @@ fn query_service_config(name: &str) -> std::result::Result<String, AetherError> 
 // Action: query_status
 // ---------------------------------------------------------------------------
 
-fn query_service_status(name: &str) -> std::result::Result<String, AetherError> {
-    let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }.map_err(|e| {
+fn query_service_status(ctx: &ErrorContext, name: &str) -> std::result::Result<String, AetherError> {
+    let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
         audit::log_failure("service", "query_status", &e.to_string());
         e
     })?;
 
-    let svc = unsafe { open_svc(scm, name, SERVICE_QUERY_STATUS) };
+    let svc = unsafe { open_svc(ctx, scm, name, SERVICE_QUERY_STATUS) };
     let _ = unsafe { CloseServiceHandle(scm) };
 
     let svc = match svc {
@@ -722,7 +730,7 @@ fn query_service_status(name: &str) -> std::result::Result<String, AetherError> 
     }
     .map_err(|e| {
         let _ = unsafe { CloseServiceHandle(svc) };
-        let err = AetherError::win32(format!("QueryServiceStatusEx failed for '{name}': {e}"));
+        let err = AetherError::win32(ctx.clone(), "QueryServiceStatusEx", e);
         audit::log_failure("service", "query_status", &err.to_string());
         err
     })?;
@@ -748,23 +756,24 @@ fn query_service_status(name: &str) -> std::result::Result<String, AetherError> 
 // Action: set_startup
 // ---------------------------------------------------------------------------
 
-fn set_startup_type(name: &str, startup: &str, force: bool) -> std::result::Result<String, AetherError> {
-    let new_type = parse_start_type(startup)?;
+fn set_startup_type(ctx: &ErrorContext, name: &str, startup: &str, force: bool) -> std::result::Result<String, AetherError> {
+    let new_type = parse_start_type(ctx, startup)?;
 
     // boot / system require force.
     if matches!(new_type, SERVICE_BOOT_START | SERVICE_SYSTEM_START) && !force {
         audit::log_security("service", "set_startup", "force not provided for boot/system");
         return Err(AetherError::permission_denied(
+            ctx.clone(),
             "Setting boot or system startup type requires force: true",
         ));
     }
 
-    let scm = unsafe { open_scm(SC_MANAGER_CONNECT) }.map_err(|e| {
+    let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
         audit::log_failure("service", "set_startup", &e.to_string());
         e
     })?;
 
-    let svc = unsafe { open_svc(scm, name, SERVICE_CHANGE_CONFIG) };
+    let svc = unsafe { open_svc(ctx, scm, name, SERVICE_CHANGE_CONFIG) };
     let _ = unsafe { CloseServiceHandle(scm) };
 
     let svc = match svc {
@@ -809,7 +818,7 @@ fn set_startup_type(name: &str, startup: &str, force: bool) -> std::result::Resu
         Err(e) => {
             let _ = unsafe { CloseServiceHandle(svc) };
             let err =
-                AetherError::win32(format!("ChangeServiceConfigW failed for '{name}': {e}"));
+                AetherError::win32(ctx.clone(), "ChangeServiceConfigW", e);
             audit::log_failure("service", "set_startup", &err.to_string());
             Err(err)
         }
@@ -820,9 +829,9 @@ fn set_startup_type(name: &str, startup: &str, force: bool) -> std::result::Resu
 // Action: drivers
 // ---------------------------------------------------------------------------
 
-fn list_drivers(filter: Option<&str>) -> std::result::Result<String, AetherError> {
+fn list_drivers(ctx: &ErrorContext, filter: Option<&str>) -> std::result::Result<String, AetherError> {
     let scm =
-        unsafe { open_scm(SC_MANAGER_ENUMERATE_SERVICE) }.map_err(|e| {
+        unsafe { open_scm(ctx, SC_MANAGER_ENUMERATE_SERVICE) }.map_err(|e| {
             audit::log_failure("service", "drivers", &e.to_string());
             e
         })?;
@@ -883,7 +892,7 @@ fn list_drivers(filter: Option<&str>) -> std::result::Result<String, AetherError
                 let mut items: Vec<serde_json::Value> = entries
                     .iter()
                     .map(|e| {
-                        let startup = unsafe { query_startup_type(scm, &e.name) }
+                        let startup = unsafe { query_startup_type(ctx, scm, &e.name) }
                             .map(|t| start_type_to_string(t))
                             .unwrap_or("unknown");
 
@@ -918,9 +927,11 @@ fn list_drivers(filter: Option<&str>) -> std::result::Result<String, AetherError
                     continue;
                 }
                 let _ = unsafe { CloseServiceHandle(scm) };
-                let err = AetherError::win32(format!(
-                    "EnumServicesStatusExW (drivers) failed after {attempt} retries"
-                ));
+                let err = AetherError::win32(
+                    ctx.clone(),
+                    "EnumServicesStatusExW",
+                    format!("(drivers) failed after {attempt} retries"),
+                );
                 audit::log_failure("service", "drivers", &err.to_string());
                 return Err(err);
             }
