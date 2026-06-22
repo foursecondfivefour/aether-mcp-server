@@ -28,43 +28,110 @@ AETHER_01 — это [MCP (Model Context Protocol)](https://modelcontextprotocol
 
 ## Быстрый старт
 
-### Требования
+### Один клик — автоустановка
 
-- **Windows 10/11** (x86-64, MSVC toolchain)
-- **Rust** 1.85+ (`rustup default stable-x86_64-pc-windows-msvc`)
-- **Администратор** (для большинства операций)
-
-### Сборка
+Скопируйте и вставьте в **PowerShell (администратор)**:
 
 ```powershell
-git clone https://github.com/YOUR_USER/aether-mcp-server
-cd aether-mcp-server
-
-# Создать .env (все feature gates выключены по умолчанию)
-Copy-Item .env.example .env
-
-# Сборка (релизная — с максимальной оптимизацией и hardening)
-cargo build --release
+irm https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1 | iex
 ```
 
-### Подключение к Cursor
+Скрипт автоматически:
+1. Найдёт или скачает последний бинарник AETHER_01
+2. Создаст `.env` с безопасными настройками по умолчанию
+3. Добавит сервер в **все найденные** агентные среды: Cursor, Claude Desktop, Windsurf, VS Code
 
-Добавить в `%USERPROFILE%\.cursor\mcp.json`:
+### Выборочная установка
+
+```powershell
+# Только Cursor
+.\install.ps1 -Targets cursor
+
+# Claude Desktop + Windsurf
+.\install.ps1 -Targets claude,windsurf
+
+# С указанием пути к своему бинарнику
+.\install.ps1 -BinaryPath target\release\aether-mcp-server.exe
+
+# Скачать конкретный релиз
+.\install.ps1 -ReleaseTag v1.0.0
+```
+
+### Сборка из исходников
+
+```powershell
+git clone https://github.com/foursecondfivefour/aether-mcp-server
+cd aether-mcp-server
+Copy-Item .env.example .env
+cargo build --release
+.\install.ps1 -BinaryPath target\release\aether-mcp-server.exe
+```
+
+### Ручная настройка (без скрипта)
+
+Добавьте в конфигурационный файл вашей агентной среды:
+
+<details>
+<summary><b>Cursor</b> — <code>%USERPROFILE%\.cursor\mcp.json</code></summary>
 
 ```json
 {
   "mcpServers": {
     "aether-01": {
-      "command": "d:\\path\\to\\target\\release\\aether-mcp-server.exe",
-      "env": {
-        "RUST_LOG": "info"
-      }
+      "command": "d:\\path\\to\\aether-mcp-server.exe",
+      "env": { "RUST_LOG": "info" }
     }
   }
 }
 ```
+</details>
 
-Перезапустить Cursor. В интерфейсе MCP появится 10 инструментов AETHER_01.
+<details>
+<summary><b>Claude Desktop</b> — <code>%APPDATA%\Claude\claude_desktop_config.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "aether-01": {
+      "command": "d:\\path\\to\\aether-mcp-server.exe",
+      "env": { "RUST_LOG": "info" }
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Windsurf</b> — <code>%USERPROFILE%\.codeium\windsurf\mcp_config.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "aether-01": {
+      "command": "d:\\path\\to\\aether-mcp-server.exe",
+      "env": { "RUST_LOG": "info" }
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>VS Code (Claude MCP)</b> — <code>%APPDATA%\Code\User\globalStorage\anthropic.claude-mcp\mcp.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "aether-01": {
+      "command": "d:\\path\\to\\aether-mcp-server.exe",
+      "env": { "RUST_LOG": "info" }
+    }
+  }
+}
+```
+</details>
+
+> **После настройки** перезапустите приложение. В интерфейсе MCP появится 10 инструментов AETHER_01.
 
 ## Feature Gates (.env)
 
