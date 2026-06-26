@@ -1570,7 +1570,7 @@ fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std:
             }
 
             let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or(
-                serde_json::Value::String(stdout.into_owned()),
+                serde_json::Value::String(stdout),
             );
             let result = serde_json::json!({
                 "restore_points": parsed,
@@ -1967,7 +1967,7 @@ pub fn handle_system_info(
         "time_set" => action_time_set(&ctx, &params),
         "ntp_sync" => action_ntp_sync(&ctx),
         "installed_software" => unsafe { action_installed_software(&ctx) },
-        "windows_update" => action_windows_update(),
+        "windows_update" => unsafe { action_windows_update() },
         "startup_programs" => unsafe { action_startup_programs() },
         "restore_points" => action_restore_points(&ctx, &params),
         "perf_counters" => unsafe { action_perf_counters(&ctx) },

@@ -89,6 +89,7 @@ fn action_event_query(params: &Value) -> Result<String, AetherError> {
         time_clauses.push(format!("EndTime<='{end}'"));
     }
 
+    let filter_str = filters.join("; ");
     let base_cmd = format!(
         "Get-WinEvent -FilterHashtable @{{{filter_str}}} -MaxEvents {max_results} -ErrorAction SilentlyContinue"
     );

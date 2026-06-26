@@ -443,7 +443,7 @@ pub fn run_mixed(
         cmd = cmd.arg(*value, *param_type)?;
     }
     for arg in unchecked_args {
-        cmd = cmd.arg_unchecked(arg);
+        cmd = cmd.arg_unchecked(*arg);
     }
     cmd.output()
 }

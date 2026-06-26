@@ -419,8 +419,8 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
                 .arg_unchecked("/c")
                 .arg_unchecked("mklink")
                 .arg_unchecked("/J")
-                .arg(&link.to_string_lossy(), ParamType::Path)?
-                .arg(&target.to_string_lossy(), ParamType::Path)?
+                .arg(link.to_string_lossy().as_ref(), ParamType::Path)?
+                .arg(target.to_string_lossy().as_ref(), ParamType::Path)?
                 .run()?;
         }
         other => {
@@ -450,9 +450,8 @@ fn fs_ads_list(params: Value) -> std::result::Result<String, AetherError> {
         .timeout(15)
         .arg_unchecked("/c")
         .arg_unchecked("dir")
-        .arg_unchecked("/R")
-        .arg(&path.to_string_lossy(), ParamType::Path)?
-        .output()?;
+        .arg_unchecked("/R")            .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
+            .output()?;
     let streams = parse_ads_list_output(&stdout);
     audit::log_success(TOOL, "ads_list", &format!("path={}", path.display()));
     serde_json::to_string(&streams).map_err(AetherError::from)
@@ -537,7 +536,7 @@ fn fs_compress(params: Value) -> std::result::Result<String, AetherError> {
     let stdout = SafeCommand::new("compact", TOOL, "compress")
         .timeout(30)
         .arg_unchecked("/C")
-        .arg(&path.to_string_lossy(), ParamType::Path)?
+        .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
         .output()
         .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "compress", &format!("path={}", path.display()));
@@ -551,7 +550,7 @@ fn fs_uncompress(params: Value) -> std::result::Result<String, AetherError> {
     let stdout = SafeCommand::new("compact", TOOL, "uncompress")
         .timeout(30)
         .arg_unchecked("/U")
-        .arg(&path.to_string_lossy(), ParamType::Path)?
+        .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
         .output()
         .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "uncompress", &format!("path={}", path.display()));
@@ -569,7 +568,7 @@ fn fs_encrypt(params: Value) -> std::result::Result<String, AetherError> {
     let stdout = SafeCommand::new("cipher", TOOL, "encrypt")
         .timeout(30)
         .arg_unchecked("/E")
-        .arg(&path.to_string_lossy(), ParamType::Path)?
+        .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
         .output()
         .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "encrypt", &format!("path={}", path.display()));
@@ -583,7 +582,7 @@ fn fs_decrypt(params: Value) -> std::result::Result<String, AetherError> {
     let stdout = SafeCommand::new("cipher", TOOL, "decrypt")
         .timeout(30)
         .arg_unchecked("/D")
-        .arg(&path.to_string_lossy(), ParamType::Path)?
+        .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
         .output()
         .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "decrypt", &format!("path={}", path.display()));
