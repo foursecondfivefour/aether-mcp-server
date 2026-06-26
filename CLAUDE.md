@@ -8,35 +8,46 @@ alwaysApply: true
 ## Project Identity
 
 - **Name:** AETHER_01
-- **Type:** MCP server over stdio, 10 tools, 99% Windows management
+- **Type:** MCP (Model Context Protocol) server over stdio — 10 tools, full Windows management
 - **Language:** Rust (edition 2021, stable 1.85+)
 - **Target:** Windows 10/11 x86-64 MSVC only
-- **Transport:** stdio — stdout is JSON-RPC ONLY, never print to stdout
+- **Transport:** stdio — stdout is JSON-RPC ONLY. Never print to stdout.
 
-## Build
+---
+
+## Build Commands
 
 ```powershell
-$env:CARGO_HOME = ".\.cargo_home"
-cargo check    # verify
-cargo build    # binary → target/debug/aether-mcp-server.exe
+$env:CARGO_HOME = ".\\.cargo_home"
+cargo check    # Quick verification
+cargo build    # Debug build → target/debug/aether-mcp-server.exe
 ```
 
-Release: `lto=fat, codegen-units=1, panic=abort, strip=symbols, target-cpu=native, CFG, ASLR, DEP, static CRT`.
+Release profile includes: `lto=fat`, `codegen-units=1`, `panic=abort`, `strip=symbols`, `target-cpu=native`, Control Flow Guard, ASLR, DEP, static CRT.
+
+---
 
 ## Architecture
 
 ```
-main.rs → dotenvy → FeatureGates → AetherServer → serve((stdin,stdout))
+main.rs → dotenvy → FeatureGates → AetherServer → serve((stdin, stdout))
 
-server.rs: AetherServer { gates, tool_router }
-  #[tool_router(router = tool_router)] → 10 tools
-  #[tool_handler(router = self.tool_router)] → ServerHandler
+server.rs
+  ├── struct AetherServer { gates: FeatureGates, tool_router: ToolRouter<Self> }
+  ├── #[tool_router(router = tool_router)]     # 10 tool methods
+  └── #[tool_handler(router = self.tool_router)] # ServerHandler
 
-tools/*.rs → pub fn handle_*(action, params) -> Result<String, AetherError>
-error.rs  → AetherError + FormatMessageW FFI (Russian errors)
-audit.rs  → log_success/failure/forced/security
-config.rs → FeatureGates from .env (all disabled by default)
+tools/*.rs
+  ├── pub fn handle_*(action, params) -> Result<String, AetherError>
+  └── Dispatch: match action { "list" => ..., "kill" => ..., ... }
+
+error.rs      → AetherError (thiserror) + FormatMessageW FFI
+audit.rs      → log_success, log_failure, log_forced, log_security, redact_sensitive
+config.rs     → FeatureGates from .env (all disabled by default)
+command.rs    → SafeCommand — secure external command runner with ParamType validation
 ```
+
+---
 
 ## 10 Tools
 
@@ -49,13 +60,15 @@ config.rs → FeatureGates from .env (all disabled by default)
 7. `network_manager` — adapters, TCP/UDP, DNS, firewall, proxy, routing, WiFi, VPN, BT
 8. `user_management` — users, groups, sessions, policies, certificates, credentials, token*
 9. `security_audit` — audit, UAC, Defender, AppLocker, BitLocker, TPM, Secure Boot, exploit
-10. `system_automation` — Event Log, Scheduled Tasks, WMI queries
+10. `system_automation` — Event Log, scheduled tasks, WMI queries
 
-* = disabled by default, enabled via .env feature gate
+`*` = Disabled by default; enabled via `.env` feature gate.
+
+---
 
 ## Key Patterns
 
-### Tool Registration
+### Tool Registration (rmcp 0.5)
 
 ```rust
 #[tool_router(router = tool_router)]
@@ -66,8 +79,11 @@ impl AetherServer {
             .unwrap_or_else(|e| format!("Error: {e}"))
     }
 }
+
 #[tool_handler(router = self.tool_router)]
-impl ServerHandler for AetherServer { fn get_info(&self) -> ServerInfo { ... } }
+impl ServerHandler for AetherServer {
+    fn get_info(&self) -> ServerInfo { ... }
+}
 ```
 
 ### Error Handling
@@ -92,14 +108,21 @@ audit::log_success("tool", "action", "detail");
 ```rust
 server.gates.check(server.gates.dll_inject, "AETHER_DLL_INJECT")?;
 ```
-All gates: `AETHER_BCD_EDIT`, `AETHER_HAL_CONFIG`, `AETHER_OFFLINE_REGISTRY`, `AETHER_DLL_INJECT`, `AETHER_TOKEN_MANIPULATION`, `AETHER_LSA_SECRETS`.
+
+Available gates: `AETHER_BCD_EDIT`, `AETHER_HAL_CONFIG`, `AETHER_OFFLINE_REGISTRY`, `AETHER_DLL_INJECT`, `AETHER_TOKEN_MANIPULATION`, `AETHER_LSA_SECRETS`.
+
+---
 
 ## Conventions
 
-- NEVER `use windows::core::*` (shadows `Result`)
-- NEVER print to stdout (MCP uses it for JSON-RPC)
-- NEVER spawn cmd/powershell for system ops — use Win32 API
-- ALWAYS use `// SAFETY:` comments on unsafe blocks
-- ALWAYS `.map_err(|e| AetherError::win32(e))?` on Win32 calls
-- `snake_case` for Rust, `camelCase` for JSON, Russian for error messages
-- Log: `tracing::info!` to stderr with `.with_ansi(false).with_writer(std::io::stderr)`
+- **NEVER** `use windows::core::*` (shadows `Result`)
+- **NEVER** print to stdout — MCP uses stdout exclusively for JSON-RPC
+- **NEVER** spawn cmd/powershell for system ops — use Win32 API directly
+- **ALWAYS** use `// SAFETY:` comments on unsafe blocks
+- **ALWAYS** `.map_err(|e| AetherError::win32(e))?` on Win32 calls
+- **ALWAYS** canonicalize file paths before operations
+- **ALWAYS** check `force: true` for dangerous operations
+- **ALWAYS** audit-log via `audit::log_*` functions
+- **NEVER** modify `mcp.json` or `.env` without explicit user request
+- `snake_case` for Rust, `camelCase` for JSON
+- Log via `tracing::info!` to stderr with `.with_ansi(false).with_writer(std::io::stderr)`

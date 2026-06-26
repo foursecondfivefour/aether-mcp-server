@@ -13,6 +13,8 @@ alwaysApply: true
 - **Target**: Windows 10/11 x86-64 MSVC only
 - **Transport**: stdio (no HTTP, no SSE)
 
+---
+
 ## Stack
 
 | Dependency | Version | Purpose |
@@ -29,11 +31,13 @@ alwaysApply: true
 | `chrono` | 0.4 | Timestamps |
 | `base64` | 0.22 | Binary encoding (screenshots) |
 
+---
+
 ## Build
 
 ```powershell
 # Dev check
-$env:CARGO_HOME = ".\.cargo_home"
+$env:CARGO_HOME = ".\\.cargo_home"
 cargo check
 
 # Dev build
@@ -42,6 +46,8 @@ cargo build
 # Release build (hardened: CFG, ASLR, DEP, static CRT, LTO, strip)
 cargo build --release
 ```
+
+---
 
 ## Architecture
 
@@ -65,17 +71,31 @@ tools/*.rs
 error.rs
   ├── enum AetherError (thiserror)
   ├── FormatMessageW FFI → win32_description(code: u32) -> String
-  └── helpers: invalid_param, permission_denied, not_found, win32, feature_disabled, wmi_error, internal
+  └── Helpers: invalid_param, permission_denied, not_found, win32, feature_disabled, wmi_error, internal
+
+command.rs
+  ├── struct SafeCommand (builder pattern)
+  ├── enum ParamType: Path, Name, RegistryPath, SafeString, Numeric, Text, Guid
+  ├── fn run_safe() / fn run_mixed()
+  └── Output capping (1 MB), timeout (30s default), audit logging
+
+audit.rs
+  ├── fn log_success / log_failure / log_forced / log_security
+  ├── fn redact_sensitive() — masks passwords, tokens, secrets in logs
+  └── Structured audit to stderr
 ```
+
+---
 
 ## Key Patterns
 
-### Tool registration (rmcp 0.5)
+### Tool Registration (rmcp 0.5)
+
 ```rust
 #[derive(Clone)]
 pub struct AetherServer {
     pub gates: FeatureGates,
-    tool_router: ToolRouter<Self>,  // field name matches router attribute
+    tool_router: ToolRouter<Self>,
 }
 
 #[tool_router(router = tool_router)]
@@ -91,31 +111,33 @@ impl AetherServer {
 impl ServerHandler for AetherServer { ... }
 ```
 
-### Dangerous operations
+### Secure Command Execution
+
 ```rust
-fn check_force(params: &Value) -> Result<(), AetherError> {
-    if !params.get("force").and_then(|v| v.as_bool()).unwrap_or(false) {
-        return Err(AetherError::permission_denied("Это опасная операция. Используйте `\"force\": true`."));
-    }
-    Ok(())
-}
+let output = SafeCommand::new("icacls", "file_system", "acl_get")
+    .timeout(15)
+    .arg(path, ParamType::Path)?
+    .output()?;
 ```
 
-### Feature gates (from .env)
+### Feature Gates
+
 ```rust
 server.gates.check(server.gates.dll_inject, "AETHER_DLL_INJECT")?;
 ```
 
-### Error handling
-All errors are human-readable Russian with hints. Win32 codes auto-translated via FormatMessageW.
+---
 
 ## Conventions
 
 - **File layout**: One tool = one file in `src/tools/`
 - **Naming**: `snake_case` for Rust, `camelCase` for JSON keys
-- **unsafe**: `#![allow(unsafe_code)]` per module, each block has `// SAFETY:` comment
+- **Unsafe**: `#![allow(unsafe_code)]` per module, each block has `// SAFETY:` comment
 - **Logging**: `tracing::info!` / `warn!` / `error!` to stderr only
 - **MCP transport**: stdout is JSON-RPC ONLY — never print to stdout
+- **Section separators**: Use `// ═══════════════════════════════════` pattern
+
+---
 
 ## Testing
 
@@ -130,6 +152,8 @@ cargo run
 cargo clippy -- -D clippy::all -D clippy::pedantic
 ```
 
+---
+
 ## Notes for AI Agents
 
 - NEVER use `cmd.exe` or `powershell.exe` to perform system operations — use Win32 API directly
@@ -138,3 +162,4 @@ cargo clippy -- -D clippy::all -D clippy::pedantic
 - ALWAYS check `force: true` for dangerous operations
 - ALWAYS audit-log via `audit::log_*` functions
 - NEVER modify `mcp.json` or `.env` without explicit user request
+- ALWAYS use `SafeCommand` for any external command invocation — never raw `std::process::Command`
