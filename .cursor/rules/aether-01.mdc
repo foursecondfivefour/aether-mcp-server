@@ -1,0 +1,57 @@
+---
+description: AETHER_01 MCP Server — Rust, Windows 10/11, MCP protocol
+globs: **/*.rs
+---
+
+# AETHER_01 — Cursor Rules
+
+## Project Context
+
+AETHER_01 is a Rust-based MCP (Model Context Protocol) server for Windows 10/11 administration. It exposes 10 tools to AI assistants via stdio JSON-RPC.
+
+## Critical Rules
+
+### NEVER do these
+- NEVER use `cmd.exe` or `powershell.exe` for system operations — use Win32 API via the `windows` crate
+- NEVER print to stdout — MCP uses stdout exclusively for JSON-RPC
+- NEVER use `windows::core::*` wildcard (shadows `Result`)
+- NEVER modify `mcp.json` or `.env` without explicit user request
+- NEVER use raw `std::process::Command` — always use `SafeCommand`
+
+### ALWAYS do these
+- ALWAYS use `// SAFETY:` comments on every `unsafe` block
+- ALWAYS `.map_err(|e| AetherError::win32(e))?` on Win32 API calls
+- ALWAYS canonicalize file paths before operations
+- ALWAYS check `force: true` for dangerous operations
+- ALWAYS audit-log via `audit::log_*` functions
+- ALWAYS validate external command parameters with `ParamType`
+
+## Build Commands
+
+```powershell
+$env:CARGO_HOME = ".\\.cargo_home"
+cargo check          # Quick verification
+cargo build          # Debug build
+cargo test -- --test-threads=1  # Full test suite
+cargo clippy         # Lint check
+```
+
+## Architecture
+
+- `server.rs` — `AetherServer` with `#[tool_router]` (10 tools)
+- `tools/*.rs` — Each file = one tool with `pub fn handle_*(action, params)`
+- `command.rs` — `SafeCommand` builder for secure command execution
+- `error.rs` — `AetherError` enum with Win32 code translation
+- `audit.rs` — Structured audit logging + secret redaction
+
+## Tool Pattern
+
+```rust
+pub fn handle_*(action: &str, params: Value) -> Result<String, AetherError> {
+    let ctx = ErrorContext::new("tool_name", action);
+    match action {
+        "action1" => { /* validate → execute → audit */ }
+        _ => Err(AetherError::invalid_param(ctx, "..."))
+    }
+}
+```

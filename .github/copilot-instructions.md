@@ -1,68 +1,53 @@
 # GitHub Copilot Instructions — AETHER_01
 
-## Always
+## Project Overview
 
-- Never print to stdout — MCP uses stdout for JSON-RPC exclusively
-- Always canonicalize file paths before operations
-- Always check `force: true` for dangerous operations
-- Always audit-log via `audit::log_*` functions
+AETHER_01 is a Rust-based MCP (Model Context Protocol) server for Windows 10/11 administration. It communicates via stdio JSON-RPC and exposes 10 tools for process, file, registry, service, GUI, system info, network, user, security, and automation management.
+
+## Coding Guidelines
+
+### DO NOT
+- Never use `cmd.exe` or `powershell.exe` for system operations — use Win32 API
+- Never print to stdout (MCP uses it for JSON-RPC)
+- Never use `windows::core::*` (shadows `Result`)
+- Never use raw `std::process::Command` — use `SafeCommand`
 - Never modify `mcp.json` or `.env` without explicit user request
 
-## Project Context
+### ALWAYS
+- Add `// SAFETY:` comments on every `unsafe` block
+- Use `.map_err(|e| AetherError::win32(e))?` on Win32 API calls
+- Check `force: true` for destructive operations
+- Log all actions via `audit::log_*`
+- Validate external command parameters with `ParamType`
+- Use `// ════` section separators in tool files
+- Order imports: std → external crates → local crate
 
-This is AETHER_01 — a Windows MCP server in Rust (edition 2021). 10 tools for 99% Windows management over stdio transport.
-Target: Windows 10/11 x86-64 MSVC only.
+## Build & Test
 
-Build: `cargo check` (verify) / `cargo build` (binary). Release profile is hardened with CFG/ASLR/DEP/static CRT.
+```powershell
+$env:CARGO_HOME = ".\\.cargo_home"
+cargo check
+cargo test -- --test-threads=1
+```
 
-## Key Dependencies
+## Key Types
 
-- `rmcp` 0.5 — MCP SDK, use `#[tool_router(router = tool_router)]` + `#[tool_handler(router = self.tool_router)]`
-- `windows` 0.58 — Win32 API, avoid importing `windows::core::*` (it shadows `std::result::Result`)
-- `windows-registry` 0.3 — high-level registry crate
-- `tracing` 0.1 — logging to stderr with `.with_ansi(false).with_writer(std::io::stderr)`
+| Type | Location | Purpose |
+|------|----------|---------|
+| `AetherServer` | `server.rs` | Server with tool router |
+| `AetherError` | `error.rs` | Typed errors |
+| `SafeCommand` | `command.rs` | Secure command runner |
+| `ParamType` | `command.rs` | Parameter validation |
+| `FeatureGates` | `config.rs` | Feature flags |
 
-## Adding a Tool Action
+## Tool Template
 
 ```rust
-// In handle_* function in tools/<tool>.rs:
-"new_action" => {
-    let param = params.get("key")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AetherError::invalid_param("key is required"))?;
-
-    check_force(&params)?;  // if dangerous
-
-    // Win32 API call
-    let result = unsafe { SomeWin32Function(param) }
-        .map_err(|e| AetherError::win32(e))?;
-
-    audit::log_success("tool_name", "new_action", &format!("param={param}"));
-    Ok(serde_json::json!({"status":"ok"}).to_string())
+pub fn handle_*(action: &str, params: Value) -> Result<String, AetherError> {
+    let ctx = ErrorContext::new("tool_name", action);
+    match action {
+        "action_name" => { /* validate → execute → audit */ }
+        _ => Err(AetherError::invalid_param(ctx, "..."))
+    }
 }
 ```
-
-## Error Pattern
-
-```rust
-// Win32 errors: always translate
-.map_err(|e| AetherError::win32(e))?
-
-// Not found
-AetherError::not_found("Registry key not found: HKLM\\...\\MissingKey")
-
-// Permission
-AetherError::permission_denied("Это опасная операция. Используйте `\"force\": true`")
-
-// Feature disabled
-server.gates.check(server.gates.bcd_edit, "AETHER_BCD_EDIT")?;
-```
-
-## Warning Signs (flag these in review)
-
-- `use windows::core::*` — shadows Result, only import needed types
-- `Result<T, E>` instead of `std::result::Result<T, AetherError>`
-- Windows API calls without `.map_err(|e| AetherError::win32(e))?`
-- Dangerous operation without `check_force(&params)?`
-- Print to stdout (use `tracing::info!` to stderr instead)
-- Missing `// SAFETY:` comment on unsafe blocks
