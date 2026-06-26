@@ -6,6 +6,7 @@
 //! and crash dump configuration.
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 
@@ -779,12 +780,11 @@ unsafe fn power_read_scheme_name(ctx: &ErrorContext, guid: &str) -> Option<Strin
 }
 
 fn action_power_plans_fallback(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
-    let output = std::process::Command::new("powercfg")
-        .args(["/list"])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "powercfg /list", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _ = ctx;
+    let stdout = SafeCommand::new("powercfg", "sysinfo", "power_plans_fallback")
+        .timeout(15)
+        .arg_unchecked("/list")
+        .output()?;
     let mut plans = Vec::new();
     let mut current_name = String::new();
     let mut current_guid = String::new();
@@ -899,12 +899,11 @@ unsafe fn action_power_query(ctx: &ErrorContext) -> std::result::Result<String, 
     }
 
     if result.is_empty() {
-        let output = std::process::Command::new("powercfg")
-            .args(["/query"])
-            .output()
-            .map_err(|e| AetherError::io_error(ctx.clone(), "powercfg /query", e))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        result.insert("raw".into(), serde_json::Value::String(stdout.into_owned()));
+        let stdout = SafeCommand::new("powercfg", "sysinfo", "power_query")
+            .timeout(15)
+            .arg_unchecked("/query")
+            .output()?;
+        result.insert("raw".into(), serde_json::Value::String(stdout));
     }
 
     let output = serde_json::to_string_pretty(&result)?;
@@ -1098,13 +1097,14 @@ unsafe fn action_device_list(ctx: &ErrorContext) -> std::result::Result<String, 
 // ---------------------------------------------------------------------------
 
 fn action_driver_list(ctx: &ErrorContext) -> Result<String, AetherError> {
+    let _ = ctx;
     // Use sc query to list drivers (avoids complex EnumServicesStatusExW API)
-    let output = std::process::Command::new("sc")
-        .args(["query", "type=", "driver"])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "sc query drivers", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = SafeCommand::new("sc", "sysinfo", "driver_list")
+        .timeout(15)
+        .arg_unchecked("query")
+        .arg("type=", ParamType::SafeString)?
+        .arg_unchecked("driver")
+        .output()?;
     let mut drivers = Vec::new();
     let mut current: Option<serde_json::Map<String, serde_json::Value>> = None;
 
@@ -1290,15 +1290,11 @@ fn action_time_set(ctx: &ErrorContext, params: &serde_json::Value) -> std::resul
     let cmd = format!(
         "Set-Date -Year {year} -Month {month} -Day {day} -Hour {hour} -Minute {minute} -Second {second}"
     );
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &cmd])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "Set-Date", e))?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::win32(ctx.clone(), "Set-Date", format!("{}", err.trim())));
-    }
+    let _ = SafeCommand::new("powershell", "sysinfo", "time_set")
+        .timeout(30)
+        .arg_unchecked("-NoProfile")
+        .arg_unchecked("-Command")
+        .arg(&cmd, ParamType::Text)?.run().map_err(|e| AetherError::win32(ctx.clone(), "Set-Date", e.to_string()))?;
 
     let result = serde_json::json!({
         "status": "success",
@@ -1312,28 +1308,20 @@ fn action_time_set(ctx: &ErrorContext, params: &serde_json::Value) -> std::resul
 // ---------------------------------------------------------------------------
 
 fn action_ntp_sync(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
-    let output = std::process::Command::new("w32tm")
-        .args(["/resync"])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "w32tm /resync", e))?;
+    let _ = ctx;
+    let output = SafeCommand::new("w32tm", "sysinfo", "ntp_sync")
+        .timeout(30)
+        .arg_unchecked("/resync")
+        .output()?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = output.trim();
 
-    let result = if output.status.success() {
-        serde_json::json!({
-            "status": "success",
-            "stdout": stdout.trim(),
-        })
-    } else {
-        serde_json::json!({
-            "status": "failed",
-            "stdout": stdout.trim(),
-            "stderr": stderr.trim(),
-        })
-    };
+    let result = serde_json::json!({
+        "status": "initiated",
+        "output": stdout,
+    });
 
-    audit::log_success("sysinfo", "ntp_sync", &serde_json::to_string(&result).unwrap_or_default());
+    audit::log_success("sysinfo", "ntp_sync", "w32tm /resync completed");
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
@@ -1417,13 +1405,16 @@ fn action_windows_update() -> std::result::Result<String, AetherError> {
         let _ = ctx_unused; // suppress unused warning
     }
 
-    let qfe = std::process::Command::new("wmic")
-        .args(["qfe", "get", "HotFixID,InstalledOn,Description", "/format:csv"])
+    let qfe = SafeCommand::new("wmic", "sysinfo", "windows_update")
+        .timeout(30)
+        .arg("qfe", ParamType::Name)?
+        .arg_unchecked("get")
+        .arg("HotFixID,InstalledOn,Description", ParamType::SafeString)?
+        .arg_unchecked("/format:csv")
         .output();
 
     match qfe {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout) => {
             let mut updates = Vec::new();
             for line in stdout.lines().skip(2) {
                 let trimmed = line.trim();
@@ -1441,8 +1432,8 @@ fn action_windows_update() -> std::result::Result<String, AetherError> {
             }
             result.insert("update_history".into(), serde_json::json!(updates));
         }
-        _ => {
-            result.insert("update_history".into(), serde_json::Value::String("wmic qfe not available".into()));
+        Err(e) => {
+            result.insert("update_history".into(), serde_json::Value::String(format!("wmic failed: {e}").into()));
         }
     }
 
@@ -1561,23 +1552,19 @@ fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std:
 
     match action {
         "list" => {
-            let output = std::process::Command::new("powershell")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    "Get-ComputerRestorePoint | Select-Object SequenceNumber,Description,CreationTime,RestorePointType | ConvertTo-Json",
-                ])
-                .output()
-                .map_err(|e| AetherError::io_error(ctx.clone(), "Get-ComputerRestorePoint", e))?;
+            let stdout = SafeCommand::new("powershell", "sysinfo", "restore_points_list")
+                .timeout(30)
+                .arg_unchecked("-NoProfile")
+                .arg_unchecked("-Command")
+                .arg("Get-ComputerRestorePoint | Select-Object SequenceNumber,Description,CreationTime,RestorePointType | ConvertTo-Json", ParamType::Text)?
+                .output()?;
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            if !output.status.success() {
-                let vss = std::process::Command::new("vssadmin")
-                    .args(["list", "shadows"])
-                    .output()
-                    .map_err(|e| AetherError::io_error(ctx.clone(), "vssadmin list shadows", e))?;
-                let vss_out = String::from_utf8_lossy(&vss.stdout);
+            if stdout.trim().is_empty() || stdout.contains("Error") {
+                let vss_out = SafeCommand::new("vssadmin", "sysinfo", "restore_points_fallback")
+                    .timeout(15)
+                    .arg_unchecked("list")
+                    .arg("shadows", ParamType::Name)?
+                    .output()?;
                 return Ok(serde_json::json!({
                     "restore_points": vss_out.trim(),
                     "method": "vssadmin",
@@ -1606,26 +1593,20 @@ fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std:
                 .and_then(|v| v.as_str())
                 .unwrap_or("AETHER_01 Restore Point");
 
-            let output = std::process::Command::new("powershell")
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    &format!("Checkpoint-Computer -Description \"{description}\" -RestorePointType MODIFY_SETTINGS"),
-                ])
-                .output()
-                .map_err(|e| AetherError::io_error(ctx.clone(), "Checkpoint-Computer", e))?;
+            let cmd = format!("Checkpoint-Computer -Description \"{description}\" -RestorePointType MODIFY_SETTINGS");
+            SafeCommand::new("powershell", "sysinfo", "restore_points_create")
+                .timeout(120)
+                .arg_unchecked("-NoProfile")
+                .arg_unchecked("-Command")
+                .arg(&cmd, ParamType::Text)?
+                .run().map_err(|e| AetherError::win32(ctx.clone(), "Checkpoint-Computer", e.to_string()))?;
 
-            if output.status.success() {
-                audit::log_forced("sysinfo", "restore_points/create");
-                Ok(serde_json::json!({
-                    "status": "success",
-                    "description": description,
-                })
-                .to_string())
-            } else {
-                let err = String::from_utf8_lossy(&output.stderr);
-                Err(AetherError::win32(ctx.clone(), "Checkpoint-Computer", format!("{}", err.trim())))
-            }
+            audit::log_forced("sysinfo", "restore_points/create");
+            Ok(serde_json::json!({
+                "status": "success",
+                "description": description,
+            })
+            .to_string())
         }
         _ => Err(AetherError::invalid_param(ctx.clone(), format!(
             "Unknown restore_points action: {action}. Use list or create."
@@ -1686,12 +1667,10 @@ fn action_bcd_list(server: &AetherServer, ctx: &ErrorContext) -> std::result::Re
         .gates
         .check(ctx.clone(), server.gates.bcd_edit, "AETHER_BCD_EDIT")?;
 
-    let output = std::process::Command::new("bcdedit")
-        .args(["/enum"])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /enum", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = SafeCommand::new("bcdedit", "sysinfo", "bcd_list")
+        .timeout(15)
+        .arg_unchecked("/enum")
+        .output()?;
     let mut entries = Vec::new();
     let mut current: Option<serde_json::Map<String, serde_json::Value>> = None;
 
@@ -1752,17 +1731,11 @@ fn action_bcd_get_entry(server: &AetherServer, ctx: &ErrorContext, params: &serd
         .and_then(|v| v.as_str())
         .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "id is required for bcd_get_entry"))?;
 
-    let output = std::process::Command::new("bcdedit")
-        .args(["/enum", id])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /enum", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        return Err(AetherError::win32(ctx.clone(), "bcdedit", format!("{}", stderr.trim())));
-    }
+    let stdout = SafeCommand::new("bcdedit", "sysinfo", "bcd_get_entry")
+        .timeout(15)
+        .arg_unchecked("/enum")
+        .arg(id, ParamType::Guid)?
+        .output()?;
 
     let result = serde_json::json!({
         "id": id,
@@ -1799,17 +1772,13 @@ fn action_bcd_set_entry(server: &AetherServer, ctx: &ErrorContext, params: &serd
         .and_then(|v| v.as_str())
         .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "value is required for bcd_set_entry"))?;
 
-    let output = std::process::Command::new("bcdedit")
-        .args(["/set", id, key, value])
-        .output()
-        .map_err(|e| AetherError::io_error(ctx.clone(), "bcdedit /set", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    if !output.status.success() {
-        return Err(AetherError::win32(ctx.clone(), "bcdedit /set", format!("{}", stderr.trim())));
-    }
+    let stdout = SafeCommand::new("bcdedit", "sysinfo", "bcd_set_entry")
+        .timeout(15)
+        .arg_unchecked("/set")
+        .arg(id, ParamType::Guid)?
+        .arg(key, ParamType::Name)?
+        .arg(value, ParamType::SafeString)?
+        .output()?;
 
     audit::log_forced("sysinfo", "bcd_set_entry");
 

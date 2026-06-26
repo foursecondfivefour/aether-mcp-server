@@ -6,46 +6,33 @@
 //! Scheduled Tasks (list/query/create/delete/run/enable/disable), and WMI queries.
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 use serde_json::{json, Value};
-use std::process::Command;
 use std::time::Duration;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Run a PowerShell command and return stdout as a trimmed String.
+/// Run a PowerShell command with timeout and return stdout as a trimmed String.
 fn ps_output(script: &str) -> std::result::Result<String, AetherError> {
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    SafeCommand::new("powershell.exe", "automation", "ps_output")
+        .timeout(30)
+        .arg_unchecked("-NoProfile")
+        .arg_unchecked("-NonInteractive")
+        .arg_unchecked("-Command")
+        .arg(script, ParamType::Text)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to spawn PowerShell: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!(
-            "PowerShell exited with error: {}",
-            stderr.trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .map(|s| s.trim().to_string())
 }
 
 /// Run a raw command and return stdout.
 fn cmd_output(program: &str, args: &[&str]) -> std::result::Result<String, AetherError> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to spawn {program}: {e}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !stdout.is_empty() {
-            return Ok(stdout);
-        }
-        return Err(AetherError::Internal(format!(
-            "{program} failed: {stderr}"
-        )));
+    let mut cmd = SafeCommand::new(program, "automation", "cmd_output").timeout(30);
+    // All args are treated as SafeString validated params
+    for arg in args {
+        cmd = cmd.arg(*arg, ParamType::SafeString)?;
     }
-    Ok(stdout)
+    cmd.output().map(|s| s.trim().to_string())
 }
 
 /// Run PowerShell and parse output as JSON.
@@ -538,46 +525,14 @@ fn action_wmi_query(params: &Value) -> std::result::Result<String, AetherError> 
     "#
     );
 
-    let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| AetherError::Internal(format!("Failed to spawn PowerShell: {e}")))?;
-
-    let timeout = Duration::from_secs(30);
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| AetherError::Internal(format!("Output read error: {e}")))?;
-                if !status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(AetherError::WmiError(format!(
-                        "WMI query failed: {}",
-                        stderr.trim()
-                    )));
-                }
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                return Ok(stdout);
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(AetherError::WmiError(
-                        "WMI query timed out after 30 seconds".to_string(),
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => {
-                return Err(AetherError::Internal(format!("Wait error: {e}")));
-            }
-        }
-    }
+    let result = SafeCommand::new("powershell.exe", "automation", "wmi_query")
+        .timeout(30)
+        .arg_unchecked("-NoProfile")
+        .arg_unchecked("-NonInteractive")
+        .arg_unchecked("-Command")
+        .arg(&script, ParamType::Text)?
+        .output()?;
+    return Ok(result);
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────

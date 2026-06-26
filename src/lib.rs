@@ -3,6 +3,7 @@
 //! Re-exports all public modules for use by the binary and integration tests.
 
 pub mod audit;
+pub mod command;
 pub mod config;
 pub mod error;
 pub mod server;

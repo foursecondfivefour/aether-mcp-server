@@ -10,13 +10,13 @@
 #![allow(unsafe_code)]
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
 
 use serde_json::{json, Value};
 use std::ffi::c_void;
 use std::mem;
-use std::process::Command;
 
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::*;
@@ -203,22 +203,14 @@ fn check_gate(ctx: ErrorContext, enabled: bool, gate_name: &str) -> std::result:
     Ok(())
 }
 
-/// Run a command and capture stdout. Returns Ok(stdout) or the error.
+/// Run a command and capture stdout with timeout and validation.
 fn run_command(program: &str, args: &[&str]) -> std::result::Result<String, AetherError> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run {program}: {e}")))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(AetherError::Internal(format!(
-            "{program} failed (exit={}): {stderr}",
-            output.status.code().unwrap_or(-1)
-        )))
+    let mut cmd = SafeCommand::new(program, "user_management", "run_command")
+        .timeout(30);
+    for arg in args {
+        cmd = cmd.arg(*arg, ParamType::SafeString)?;
     }
+    cmd.output()
 }
 
 /// Parse a JSON string param, or default.
@@ -678,24 +670,16 @@ fn group_membership(_server: &AetherServer, params: &Value) -> std::result::Resu
         }
         "remove" => {
             // Use `net localgroup` command as the most reliable cross-platform approach
-            let output = Command::new("net")
-                .args(["localgroup", &group_name, &username, "/delete"])
-                .output();
-
-            match output {
-                Ok(o) if o.status.success() => {}
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    return Err(AetherError::Internal(format!(
-                        "Failed to remove {username} from {group_name}: {stderr}"
-                    )));
-                }
-                Err(e) => {
-                    return Err(AetherError::Internal(format!(
-                        "Failed to run net localgroup: {e}"
-                    )));
-                }
-            }
+            SafeCommand::new("net", "user_management", "group_membership_remove")
+                .timeout(15)
+                .arg_unchecked("localgroup")
+                .arg(&group_name, ParamType::Name)?
+                .arg(&username, ParamType::Name)?
+                .arg_unchecked("/delete")
+                .run()
+                .map_err(|e| AetherError::Internal(format!(
+                    "Failed to remove {username} from {group_name}: {e}"
+                )))?;
         }
         _ => {
             return Err(AetherError::invalid_param(ctx.clone(),
@@ -1136,7 +1120,10 @@ fn account_lockout(_server: &AetherServer) -> std::result::Result<String, Aether
             if !buf.is_null() {
                 NetApiBufferFree(Some(buf as *const c_void));
             }
-            let output = run_command("net", &["accounts"])?;
+            let output = SafeCommand::new("net", "user_management", "account_lockout")
+                .timeout(15)
+                .arg_unchecked("accounts")
+                .output()?;
             lockout_threshold = parse_net_accounts_u32(&output, "Lockout threshold");
             lockout_duration_secs =
                 parse_net_accounts_minutes(&output, "Lockout duration") * 60;
@@ -1831,18 +1818,20 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
     let ctx = ErrorContext::new("user_management", "lsa_secrets_list");
     check_gate(ctx.clone(), server.gates.lsa_secrets, "AETHER_LSA_SECRETS")?;
 
-    // Primary approach: registry scan
-    let reg_output = Command::new("reg")
-        .args(["query", r"HKLM\SECURITY\Policy\Secrets"])
-        .output();
+    // Primary approach: registry scan via SafeCommand
+    let reg_result = SafeCommand::new("reg", "user_management", "lsa_secrets_list")
+        .timeout(15)
+        .arg_unchecked("query")
+        .arg(r"HKLM\SECURITY\Policy\Secrets", ParamType::RegistryPath)
+        .and_then(|cmd| cmd.output());
 
-    match reg_output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+    match reg_result {
+        Ok(reg_stdout) => {
+            // Registry scan succeeded — parse the output
             let mut secrets: Vec<String> = Vec::new();
             let mut current_key = String::new();
 
-            for line in stdout.lines() {
+            for line in reg_stdout.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("HKEY_LOCAL_MACHINE\\") {
                     if let Some(pos) = trimmed.rfind('\\') {
@@ -1870,14 +1859,11 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
 
             let mut result: Vec<Value> = Vec::new();
             for secret in &secrets {
-                let detail = Command::new("reg")
-                    .args([
-                        "query",
-                        &format!(r"HKLM\SECURITY\Policy\Secrets\{secret}"),
-                    ])
-                    .output()
-                    .ok()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                let detail = SafeCommand::new("reg", "user_management", "lsa_secrets_detail")
+                    .timeout(15)
+                    .arg_unchecked("query")
+                    .arg(&format!(r"HKLM\SECURITY\Policy\Secrets\{secret}"), ParamType::RegistryPath)
+                    .and_then(|cmd| cmd.output())
                     .unwrap_or_default();
 
                 result.push(json!({
@@ -1891,7 +1877,7 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
 
             // Also try to get keys directly from the output
             if result.is_empty() {
-                for line in stdout.lines() {
+                for line in reg_stdout.lines() {
                     let trimmed = line.trim();
                     if trimmed.starts_with("HKEY_LOCAL_MACHINE\\")
                         && !trimmed.ends_with("\\SECURITY\\Policy\\Secrets")
@@ -1913,13 +1899,9 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
                 }
             }
 
-            Ok(serde_json::to_string_pretty(&json!({
-                "source": "registry",
-                "count": result.len(),
-                "secrets": result,
-            }))?)
+            Ok(serde_json::to_string_pretty(&json!({ "source": "registry", "count": result.len(), "secrets": result }))?)
         }
-        _ => {
+        Err(_) => {
             // Fallback: try LSA enumerate
             unsafe {
                 let obj_attrs = LSA_OBJECT_ATTRIBUTES::default();
@@ -1955,8 +1937,7 @@ fn lsa_secrets_list(server: &AetherServer) -> std::result::Result<String, Aether
                         Buffer: PWSTR(w_key.as_ptr() as *mut u16),
                     };
 
-                    let mut private_data: *mut UNICODE_STRING =
-                        std::ptr::null_mut();
+                    let mut private_data: *mut UNICODE_STRING = std::ptr::null_mut();
                     let s = LsaRetrievePrivateData(
                         policy_handle,
                         &key_str,

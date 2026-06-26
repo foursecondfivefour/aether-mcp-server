@@ -9,12 +9,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 
 // ---------------------------------------------------------------------------
@@ -313,16 +313,11 @@ fn fs_acl_get(params: Value) -> std::result::Result<String, AetherError> {
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx.clone(), &path_str)?;
     let path_display = path.to_string_lossy().to_string();
-    let output = Command::new("icacls")
-        .arg(&path_display)
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run icacls: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("icacls failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let acl_map = parse_icacls_output(&stdout);
+    let output = SafeCommand::new("icacls", TOOL, "acl_get")
+        .timeout(15)
+        .arg(&path_display, ParamType::Path)?
+        .output()?;
+    let acl_map = parse_icacls_output(&output);
     audit::log_success(TOOL, "acl_get", &format!("path={}", path.display()));
     serde_json::to_string(&acl_map).map_err(AetherError::from)
 }
@@ -374,16 +369,12 @@ fn fs_acl_set(params: Value) -> std::result::Result<String, AetherError> {
     let permissions = get_str(ctx.clone(), &params, "permissions")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
     let grant = format!("{}:{}", user, permissions);
-    let output = Command::new("icacls")
-        .arg(path.to_string_lossy().as_ref())
-        .arg("/grant")
-        .arg(&grant)
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run icacls: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("icacls /grant failed: {stderr}")));
-    }
+    let _ = SafeCommand::new("icacls", TOOL, "acl_set")
+        .timeout(15)
+        .arg(path.to_string_lossy().as_ref(), ParamType::Path)?
+        .arg_unchecked("/grant")
+        .arg(&grant, ParamType::SafeString)?
+        .run()?;
     audit::log_success(TOOL, "acl_set", &format!("path={} user={user} perms={permissions}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
@@ -423,20 +414,14 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
         }
         "junction" => {
             // Junction requires mklink /J via cmd.exe (cmd built-in)
-            let output = Command::new("cmd")
-                .args([
-                    "/c",
-                    "mklink",
-                    "/J",
-                    &link.to_string_lossy(),
-                    &target.to_string_lossy(),
-                ])
-                .output()
-                .map_err(|e| AetherError::Internal(format!("Failed to run cmd /c mklink /J: {e}")))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(AetherError::Internal(format!("mklink /J failed: {stderr}")));
-            }
+            SafeCommand::new("cmd", TOOL, "symlink_junction")
+                .timeout(15)
+                .arg_unchecked("/c")
+                .arg_unchecked("mklink")
+                .arg_unchecked("/J")
+                .arg(&link.to_string_lossy(), ParamType::Path)?
+                .arg(&target.to_string_lossy(), ParamType::Path)?
+                .run()?;
         }
         other => {
             return Err(AetherError::invalid_param(ctx, format!(
@@ -461,15 +446,13 @@ fn fs_ads_list(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "ads_list");
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
-    let output = Command::new("cmd")
-        .args(["/c", "dir", "/R", &path.to_string_lossy()])
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run dir /R: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("dir /R failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = SafeCommand::new("cmd", TOOL, "ads_list")
+        .timeout(15)
+        .arg_unchecked("/c")
+        .arg_unchecked("dir")
+        .arg_unchecked("/R")
+        .arg(&path.to_string_lossy(), ParamType::Path)?
+        .output()?;
     let streams = parse_ads_list_output(&stdout);
     audit::log_success(TOOL, "ads_list", &format!("path={}", path.display()));
     serde_json::to_string(&streams).map_err(AetherError::from)
@@ -551,15 +534,12 @@ fn fs_compress(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "compress");
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
-    let output = Command::new("compact")
-        .args(["/C", &path.to_string_lossy()])
+    let stdout = SafeCommand::new("compact", TOOL, "compress")
+        .timeout(30)
+        .arg_unchecked("/C")
+        .arg(&path.to_string_lossy(), ParamType::Path)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run compact: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("compact /C failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "compress", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
@@ -568,15 +548,12 @@ fn fs_uncompress(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "uncompress");
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
-    let output = Command::new("compact")
-        .args(["/U", &path.to_string_lossy()])
+    let stdout = SafeCommand::new("compact", TOOL, "uncompress")
+        .timeout(30)
+        .arg_unchecked("/U")
+        .arg(&path.to_string_lossy(), ParamType::Path)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run compact: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("compact /U failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "uncompress", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
@@ -589,15 +566,12 @@ fn fs_encrypt(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "encrypt");
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
-    let output = Command::new("cipher")
-        .args(["/E", &path.to_string_lossy()])
+    let stdout = SafeCommand::new("cipher", TOOL, "encrypt")
+        .timeout(30)
+        .arg_unchecked("/E")
+        .arg(&path.to_string_lossy(), ParamType::Path)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run cipher: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("cipher /E failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "encrypt", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
@@ -606,15 +580,12 @@ fn fs_decrypt(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "decrypt");
     let path_str = get_str(ctx.clone(), &params, "path")?;
     let path = canonicalize_path_required(ctx, &path_str)?;
-    let output = Command::new("cipher")
-        .args(["/D", &path.to_string_lossy()])
+    let stdout = SafeCommand::new("cipher", TOOL, "decrypt")
+        .timeout(30)
+        .arg_unchecked("/D")
+        .arg(&path.to_string_lossy(), ParamType::Path)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run cipher: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!("cipher /D failed: {stderr}")));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        .map(|s| s.trim().to_string())?;
     audit::log_success(TOOL, "decrypt", &format!("path={}", path.display()));
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
@@ -791,11 +762,10 @@ fn fs_shares(params: Value) -> std::result::Result<String, AetherError> {
 }
 
 fn shares_list(_ctx: ErrorContext) -> std::result::Result<String, AetherError> {
-    let output = Command::new("net")
-        .arg("share")
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run net share: {e}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = SafeCommand::new("net", TOOL, "shares_list")
+        .timeout(15)
+        .arg_unchecked("share")
+        .output()?;
     let shares = parse_net_share_output(&stdout);
     audit::log_success(TOOL, "shares", &format!("list count={}", shares.as_array().map_or(0, |a| a.len())));
     serde_json::to_string(&shares).map_err(AetherError::from)
@@ -858,30 +828,23 @@ fn shares_create(ctx: ErrorContext, params: Value) -> std::result::Result<String
     let name = get_str(ctx.clone(), &params, "name")?;
     let share_path = get_str(ctx.clone(), &params, "share_path")?;
     let share_spec = format!("{name}={share_path}");
-    let output = Command::new("net")
-        .args(["share", &share_spec])
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run net share create: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(AetherError::Internal(format!("net share create failed: {stderr} {stdout}")));
-    }
+    let _ = SafeCommand::new("net", TOOL, "shares_create")
+        .timeout(15)
+        .arg_unchecked("share")
+        .arg(&share_spec, ParamType::SafeString)?
+        .run()?;
     audit::log_success(TOOL, "shares", &format!("create name={name} path={share_path}"));
     Ok(json!({ "ok": true, "name": name, "share_path": share_path }).to_string())
 }
 
 fn shares_delete(ctx: ErrorContext, params: Value) -> std::result::Result<String, AetherError> {
     let name = get_str(ctx.clone(), &params, "name")?;
-    let output = Command::new("net")
-        .args(["share", &name, "/delete"])
-        .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to run net share delete: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(AetherError::Internal(format!("net share delete failed: {stderr} {stdout}")));
-    }
+    let _ = SafeCommand::new("net", TOOL, "shares_delete")
+        .timeout(15)
+        .arg_unchecked("share")
+        .arg(&name, ParamType::Name)?
+        .arg_unchecked("/delete")
+        .run()?;
     audit::log_success(TOOL, "shares", &format!("delete name={name}"));
     Ok(json!({ "ok": true, "name": name }).to_string())
 }

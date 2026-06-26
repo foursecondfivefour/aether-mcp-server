@@ -7,27 +7,23 @@
 //! Credential Guard, LSA protection, exploit protection, sandbox/Hyper-V/Hello status.
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 use serde_json::{json, Value};
-use std::process::Command;
 use windows_registry::LOCAL_MACHINE;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Run a PowerShell command and return stdout as a trimmed String.
+/// Run a PowerShell command with timeout and return stdout as a trimmed String.
 fn ps_output(script: &str) -> std::result::Result<String, AetherError> {
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    SafeCommand::new("powershell.exe", "security", "ps_output")
+        .timeout(30)
+        .arg_unchecked("-NoProfile")
+        .arg_unchecked("-NonInteractive")
+        .arg_unchecked("-Command")
+        .arg(script, ParamType::Text)?
         .output()
-        .map_err(|e| AetherError::Internal(format!("Failed to spawn PowerShell: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::Internal(format!(
-            "PowerShell exited with error: {}",
-            stderr.trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .map(|s| s.trim().to_string())
 }
 
 /// Run PowerShell and parse output as JSON.

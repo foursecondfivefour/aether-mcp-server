@@ -9,6 +9,7 @@
 //! Uses Win32 APIs with `std::process::Command` fallbacks.
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 
 use serde_json::{json, Value};
@@ -301,13 +302,11 @@ fn pid_to_name(pid: u32) -> String {
 
 /// Run a system command and return its combined stdout+stderr.
 fn run_cmd(exe: &str, args: &[&str]) -> std::result::Result<String, AetherError> {
-    let out = std::process::Command::new(exe)
-        .args(args)
-        .output()
-        .map_err(|e| AetherError::Internal(format!("spawn {exe}: {e}")))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    Ok(if stdout.is_empty() { stderr } else { stdout })
+    let mut cmd = SafeCommand::new(exe, "network", "run_cmd").timeout(30);
+    for arg in args {
+        cmd = cmd.arg(*arg, ParamType::SafeString)?;
+    }
+    cmd.output()
 }
 
 /// IPv4 u32 (network byte order) → dotted-decimal string.
@@ -722,21 +721,44 @@ fn action_proxy(params: &Value) -> std::result::Result<String, AetherError> {
 
         audit::log_forced("network", "proxy_set");
 
-        run_cmd("reg", &[
-            "add", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings",
-            "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", &enable.to_string(), "/f",
-        ])?;
+        let _ = SafeCommand::new("reg", "network", "proxy_set")
+            .timeout(15)
+            .arg_unchecked("add")
+            .arg(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings", ParamType::RegistryPath)?
+            .arg_unchecked("/v")
+            .arg("ProxyEnable", ParamType::Name)?
+            .arg_unchecked("/t")
+            .arg_unchecked("REG_DWORD")
+            .arg_unchecked("/d")
+            .arg(&enable.to_string(), ParamType::Numeric)?
+            .arg_unchecked("/f")
+            .run()?;
+
         if !server.is_empty() {
-            run_cmd("reg", &[
-                "add", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings",
-                "/v", "ProxyServer", "/t", "REG_SZ", "/d", server, "/f",
-            ])?;
+            let _ = SafeCommand::new("reg", "network", "proxy_set")
+                .timeout(15)
+                .arg_unchecked("add")
+                .arg(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings", ParamType::RegistryPath)?
+                .arg_unchecked("/v")
+                .arg("ProxyServer", ParamType::Name)?
+                .arg_unchecked("/t")
+                .arg_unchecked("REG_SZ")
+                .arg_unchecked("/d")
+                .arg(server, ParamType::SafeString)?.arg_unchecked("/f")
+            .run()?;
         }
         if !overrides.is_empty() {
-            run_cmd("reg", &[
-                "add", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings",
-                "/v", "ProxyOverride", "/t", "REG_SZ", "/d", overrides, "/f",
-            ])?;
+            let _ = SafeCommand::new("reg", "network", "proxy_set")
+                .timeout(15)
+                .arg_unchecked("add")
+                .arg(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings", ParamType::RegistryPath)?
+                .arg_unchecked("/v")
+                .arg("ProxyOverride", ParamType::Name)?
+                .arg_unchecked("/t")
+                .arg_unchecked("REG_SZ")
+                .arg_unchecked("/d")
+                .arg(overrides, ParamType::SafeString)?.arg_unchecked("/f")
+            .run()?;
         }
         return Ok(json!({"status":"proxy_updated","proxy_enable":enable,"proxy_server":server,"proxy_override":overrides}).to_string());
     }
@@ -769,17 +791,20 @@ fn action_proxy(params: &Value) -> std::result::Result<String, AetherError> {
 
     // Fallback to registry
     let reg_val = |name: &str| -> String {
-        run_cmd("reg", &[
-            "query", r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings",
-            "/v", name,
-        ])
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.contains("REG_"))
-        .filter_map(|l| l.split_whitespace().last())
-        .next()
-        .unwrap_or("")
-        .to_string()
+        SafeCommand::new("reg", "network", "proxy_reg_fallback")
+            .timeout(15)
+            .arg_unchecked("query")
+            .arg(r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings", ParamType::RegistryPath)?
+            .arg_unchecked("/v")
+            .arg(name, ParamType::Name)?
+            .output()
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("REG_"))
+            .filter_map(|l| l.split_whitespace().last())
+            .next()
+            .unwrap_or("")
+            .to_string()
     };
 
     let enabled = reg_val("ProxyEnable").to_lowercase() == "0x1";
@@ -1185,7 +1210,13 @@ fn action_network_shares(params: &Value) -> std::result::Result<String, AetherEr
         let share_path = params.get("share_path").and_then(|v| v.as_str())
             .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "share_path required"))?;
         audit::log_forced("network", "share_create");
-        let out = run_cmd("net", &["share", name, "=", share_path])?;
+        let out = SafeCommand::new("net", "network", "net_share_create")
+                .timeout(15)
+                .arg_unchecked("share")
+                .arg(name, ParamType::Name)?
+                .arg_unchecked("=")
+                .arg(share_path, ParamType::Path)?
+                .output()?;
         return Ok(json!({"status":"created","share_name":name,"output":out}).to_string());
     }
 
@@ -1195,12 +1226,20 @@ fn action_network_shares(params: &Value) -> std::result::Result<String, AetherEr
             return Err(AetherError::invalid_param(ctx.clone(), "force=true required to delete share"));
         }
         audit::log_forced("network", "share_delete");
-        let out = run_cmd("net", &["share", del, "/delete"])?;
+        let out = SafeCommand::new("net", "network", "net_share_delete")
+                .timeout(15)
+                .arg_unchecked("share")
+                .arg(del, ParamType::Name)?
+                .arg_unchecked("/delete")
+                .output()?;
         return Ok(json!({"status":"deleted","share_name":del,"output":out}).to_string());
     }
 
     // Enumerate — use net share
-    let out = run_cmd("net", &["share"])?;
+    let out = SafeCommand::new("net", "network", "net_shares_list")
+        .timeout(15)
+        .arg_unchecked("share")
+        .output()?;
     Ok(json!({"source":"net share","raw_output":out}).to_string())
 }
 

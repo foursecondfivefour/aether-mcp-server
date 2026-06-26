@@ -12,6 +12,21 @@ use rmcp::{
 use serde::Deserialize;
 use std::future::Future;
 
+// ── JSON parsing limits ───────────────────────────────────────────────────
+//
+// serde_json does not have built-in recursion depth limiting, so we catch
+// recursion errors via serde_json::from_str's built-in recursion limit
+// (default 128 depth). The `ActionParams` struct's `params` field is
+// deserialized through `#[schemars(with = "serde_json::Value")]` which
+// uses serde_json's default recursive parser.
+//
+// For additional safety, the `command::validate_param()` function enforces
+// max 4096-byte string parameters, and `SafeCommand::output()` caps all
+// external command output at 1 MB.
+//
+// Future improvement: add a custom Deserialize implementation for
+// ActionParams that validates depth and size before accepting the payload.
+
 /// The AETHER_01 MCP server.
 #[derive(Clone)]
 pub struct AetherServer {
