@@ -158,7 +158,7 @@ impl ServerHandler for AetherServer {
             capabilities: ServerCapabilities::builder().enable_tools().enable_logging().build(),
             server_info: Implementation {
                 name: "AETHER_01".to_string(),
-                version: "1.0.0".to_string(),
+                version: "1.1.0".to_string(),
             },
             instructions: Some(
                 "AETHER_01 — Full-spectrum Windows 10/11 management server.\n\

@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-server"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "AETHER_01 — Windows MCP Server with 99% system management coverage"
 

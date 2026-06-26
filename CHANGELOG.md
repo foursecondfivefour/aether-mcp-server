@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] — 2026-06-26
+
+### Added
+- Shared `common.rs` module — `ps_output`, `ps_json`, `check_force`, `ps_escape`, and `get_param_*` helpers extracted from `security.rs` and `automation.rs`, eliminating code duplication
+- Full documentation architecture: `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`, `SUPPORT.md`, `.env.example`, `LICENSE` (MIT)
+- GitHub templates: `bug_report.md`, `feature_request.md`, `PULL_REQUEST_TEMPLATE.md`
+- AI agent skill files: 7 Codebuff skills under `.agents/skills/`, `.cursor/rules/aether-01.mdc`, `.windsurfrules`, `.github/copilot-instructions.md`
+
+### Changed
+- All 12 source files standardized: consistent section separators (`// ════`), named constants for magic numbers/registry paths, organized imports (std → external → local), `TOOL` constants for audit logging
+- `network.rs` `action_proxy` closure fixed — now correctly returns `Result<String, AetherError>` instead of using `?` in a non-Result closure
+- `network.rs` `hosts_file` write path now uses audited `SafeCommand` instead of raw `std::fs`
+- Documentation rewritten in international English with consistent professional tone across all files
+
+### Fixed
+- **Compilation blocker**: `security.rs` — removed ~200 lines of duplicate function definitions (old version remained after common.rs migration)
+- **Compilation blocker**: `gui.rs` — removed duplicate `CF_UNICODETEXT` constant
+- **Compilation blocker**: `network.rs` — fixed `#![allow(unsafe_code)]` on same line as module doc comment
+- `sysinfo.rs` — `action_windows_update` marked `unsafe fn` (called unsafe API without explicit safety annotation)
+
+### Security
+- All documentation files audited for consistency, removed any remaining Russian text
+- `network.rs` `hosts_file` — write operations migrated from raw `std::fs::write` to `SafeCommand` through PowerShell with full audit trail
+
+---
+
 ## [1.0.1] — 2025-06-26
 
 ### Added
