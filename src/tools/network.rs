@@ -1,8 +1,6 @@
-#![allow(unsafe_code)]
-
-//! Network management tool for AETHER_01 MCP server.
+#![allow(unsafe_code)]//! Network management tool for AETHER_01 MCP server.
 //!
-//! Provides 13 actions: adapters, connections, dns_cache, firewall_rules,
+//! 13 actions: adapters, connections, dns_cache, firewall_rules,
 //! firewall_profiles, proxy, routing_table, network_stats, wifi_profiles,
 //! vpn_connections, bluetooth_devices, hosts_file, network_shares.
 //!
@@ -18,7 +16,7 @@ use std::path::Path;
 use std::ptr;
 use std::slice;
 
-use windows::core::{PCWSTR, PWSTR, w, s};
+use windows::core::{s, w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::NetworkManagement::IpHelper::*;
 use windows::Win32::NetworkManagement::WiFi::*;
@@ -45,9 +43,9 @@ extern "system" {
     fn BluetoothFindDeviceClose(h_find: isize) -> BOOL;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // FFI: Windows HTTP proxy (winhttp.dll)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 #[link(name = "winhttp")]
 extern "system" {
@@ -56,9 +54,9 @@ extern "system" {
     ) -> BOOL;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // FFI: RAS / VPN connections (rasapi32.dll)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 #[link(name = "rasapi32")]
 extern "system" {
@@ -74,9 +72,9 @@ extern "system" {
     ) -> u32;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // FFI structs (manually defined to match Windows SDK layouts)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 #[repr(C)]
 struct BLUETOOTH_DEVICE_SEARCH_PARAMS {
@@ -141,9 +139,9 @@ struct DNS_CACHE_ENTRY {
     dwTtl: u32,
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constants & helpers
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Convert a `SOCKADDR` pointer to a human-readable IP string.
 unsafe fn sockaddr_to_ip(addr_ptr: *const SOCKADDR) -> String {

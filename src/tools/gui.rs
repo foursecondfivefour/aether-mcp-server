@@ -1,11 +1,8 @@
 //! GUI automation tool for AETHER_01 MCP server.
 //!
-//! Implements 23 GUI automation actions using Win32 APIs:
-//! mouse control, keyboard input, window management, screenshot capture,
-//! clipboard access, display configuration, audio control, and more.
-//!
-//! All actions are dispatched through the single public entry point:
-//! `handle_gui_automation(action, params) -> Result<String, AetherError>`.
+//! 23 GUI automation actions using Win32 APIs: mouse control, keyboard input,
+//! window management, screenshot capture, clipboard access, display config,
+//! audio control, screen lock, and input locale.
 
 #![allow(unsafe_code)]
 
@@ -29,9 +26,9 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Raw clipboard FFI (user32.dll)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 #[link(name = "user32")]
 extern "system" {
     fn OpenClipboard(hWndNewOwner: isize) -> i32;
@@ -42,14 +39,16 @@ extern "system" {
 }
 const CF_UNICODETEXT: u32 = 13;
 
-// ---------------------------------------------------------------------------
-// Tool name constant
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════════
 const TOOL: &str = "gui";
 
-// ---------------------------------------------------------------------------
+const CF_UNICODETEXT: u32 = 13;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Public entry point
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Dispatch a GUI automation action by name.
 ///

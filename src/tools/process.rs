@@ -1,17 +1,18 @@
 //! Process control tool for AETHER_01 MCP server.
 //!
-//! Provides 12 actions for comprehensive Windows process management:
+//! 13 actions for comprehensive Windows process management:
 //! list, kill, create, set_priority, query_info, threads, set_affinity,
 //! memory_limits, suspend, resume, list_handles, list_modules, inject_dll.
 //!
 //! Dangerous operations (kill, realtime priority, DLL injection) require `force: true`.
-//! DLL injection requires the `AETHER_DLL_INJECT` feature gate enabled in `.env`.
+//! DLL injection requires the `AETHER_DLL_INJECT` feature gate.
 
 #![allow(unsafe_code)]
 
 use crate::audit;
 use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
+
 use serde_json::{json, Value};
 use std::ffi::c_void;
 use std::mem;
@@ -23,12 +24,10 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     Thread32First, Thread32Next, CREATE_TOOLHELP_SNAPSHOT_FLAGS, MODULEENTRY32W, PROCESSENTRY32W,
     TH32CS_SNAPMODULE, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
-use windows::Win32::System::LibraryLoader::{
-    GetModuleHandleW, GetProcAddress,
-};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Memory::{
-    VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
-    PAGE_READWRITE, VIRTUAL_ALLOCATION_TYPE,
+    VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+    VIRTUAL_ALLOCATION_TYPE,
 };
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Threading::{
@@ -43,9 +42,9 @@ use windows::Win32::System::Threading::{
     REALTIME_PRIORITY_CLASS, STARTUPINFOW, THREAD_ACCESS_RIGHTS, THREAD_SUSPEND_RESUME,
 };
 
-// ---------------------------------------------------------------------------
-// NtQuerySystemInformation / NtWriteVirtualMemory extern (ntdll)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// NtQuerySystemInformation / NtWriteVirtualMemory (ntdll FFI)
+// ═══════════════════════════════════════════════════════════════════════════════
 #[repr(C)]
 #[allow(non_snake_case)]
 struct SystemHandleTableEntryInfo {
@@ -78,9 +77,9 @@ extern "system" {
     ) -> i32;
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Main dispatch
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Dispatch `process_control` actions.
 ///
@@ -127,9 +126,9 @@ pub async fn handle_process_control(
     result
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract value from JSON params
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Parameter extraction helpers
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn get_u32(ctx: ErrorContext, params: &Value, key: &str) -> std::result::Result<u32, AetherError> {
     params
@@ -168,9 +167,9 @@ fn wide_string(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 1. list — enumerate all processes
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn list_processes(_params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "list");
@@ -229,9 +228,9 @@ async fn list_processes(_params: Value) -> std::result::Result<String, AetherErr
     serde_json::to_string(&result).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 2. kill — terminate a process by PID or name
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn kill_process(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "kill");
@@ -300,9 +299,9 @@ fn find_pid_by_name(ctx: ErrorContext, name: &str) -> std::result::Result<u32, A
     found.ok_or_else(|| AetherError::not_found(ctx, format!("No process matching name: {name}"), None))
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 3. create — launch an executable
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn create_process(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "create");
@@ -378,9 +377,9 @@ async fn create_process(params: Value) -> std::result::Result<String, AetherErro
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 4. set_priority — set process priority class
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn set_priority(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "set_priority");
@@ -425,9 +424,9 @@ async fn set_priority(params: Value) -> std::result::Result<String, AetherError>
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 5. query_info — detailed process information
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn query_info(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "query_info");
@@ -509,9 +508,9 @@ fn filetime_to_u64(ft: &FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 6. threads — list threads of a process
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn list_threads(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "threads");
@@ -563,9 +562,9 @@ async fn list_threads(params: Value) -> std::result::Result<String, AetherError>
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 7. set_affinity — set CPU affinity mask
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn set_affinity(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "set_affinity");
@@ -618,9 +617,9 @@ async fn set_affinity(params: Value) -> std::result::Result<String, AetherError>
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 8. memory_limits — set working set size
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn memory_limits(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "memory_limits");
@@ -660,17 +659,17 @@ async fn memory_limits(params: Value) -> std::result::Result<String, AetherError
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 9a. suspend — suspend a process (all threads) or single thread
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn suspend_process_or_thread(params: Value) -> std::result::Result<String, AetherError> {
     suspend_resume_inner(params, false).await
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 9b. resume — resume a process (all threads) or single thread
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn resume_process_or_thread(params: Value) -> std::result::Result<String, AetherError> {
     suspend_resume_inner(params, true).await
@@ -812,9 +811,9 @@ fn enumerate_thread_ids(ctx: ErrorContext, pid: u32) -> std::result::Result<Vec<
     Ok(tids)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 10. list_handles — enumerate open handles via NtQuerySystemInformation
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn list_handles(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "list_handles");
@@ -897,9 +896,9 @@ async fn list_handles(params: Value) -> std::result::Result<String, AetherError>
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 11. list_modules — list loaded DLLs (modules)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn list_modules(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "list_modules");
@@ -967,9 +966,9 @@ async fn list_modules(params: Value) -> std::result::Result<String, AetherError>
     serde_json::to_string(&output).map_err(AetherError::from)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // 12. inject_dll — DLL injection via CreateRemoteThread(LoadLibraryW)
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("process_control", "inject_dll");
@@ -1130,9 +1129,9 @@ async fn inject_dll(server: &AetherServer, params: Value) -> std::result::Result
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Shared helpers
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Open a process with the requested access rights.
 fn open_process(ctx: ErrorContext, pid: u32, access: PROCESS_ACCESS_RIGHTS) -> std::result::Result<HANDLE, AetherError> {

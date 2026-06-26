@@ -1,21 +1,30 @@
 //! Registry Editor tool for the AETHER_01 MCP server.
 //!
-//! Provides read, write, delete, enumerate, security inspection, change monitoring,
-//! .reg export/import, and offline hive mount/unmount operations.
-//! All dangerous operations require `force: true` and HKLM writes are gated.
+//! 11 actions: read, write, delete, enumerate, security_get, security_set,
+//! monitor, export, import, offline_mount, offline_unmount.
+//! Dangerous operations require `force: true`; HKLM writes are gated.
 //! Offline hive operations require the `AETHER_OFFLINE_REGISTRY` feature gate.
 
 #![allow(unsafe_code)]
 
 use crate::audit;
+use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 use crate::server::AetherServer;
+
 use serde_json::{json, Value};
-use std::process::Command;
 use windows_registry::*;
 
-// ── Raw Windows API imports ────────────────────────────────────────────────────
-
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{BOOL, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Security::{
+    DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR,
+};
+use windows::Win32::Security::Authorization::{
+    ConvertSecurityDescriptorToStringSecurityDescriptorW,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegGetKeySecurity, RegLoadKeyW, RegNotifyChangeKeyValue, RegOpenKeyExW,
     RegSetKeySecurity, RegUnLoadKeyW, KEY_NOTIFY, KEY_READ, KEY_WRITE,
@@ -24,26 +33,22 @@ use windows::Win32::System::Registry::{
 };
 
 // windows_registry 0.3 HKEY is *mut c_void but not publicly re-exported.
-// We define it here to match the internal HKEY type used by windows_registry::Key.
 #[allow(dead_code)]
 type HKEY = *mut std::ffi::c_void;
 
-use windows::Win32::Security::{
-    DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-};
-use windows::Win32::Security::Authorization::{
-    ConvertSecurityDescriptorToStringSecurityDescriptorW,
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-};
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════════
 
-use windows::Win32::Foundation::{HANDLE, HLOCAL, BOOL, LocalFree};
+/// Tool name for audit logging.
+const TOOL: &str = "registry_editor";
 
-use windows::core::{PCWSTR, PWSTR};
+/// Legacy HKEY_CURRENT_CONFIG handle value.
+const HKEY_CURRENT_CONFIG_RAW: u32 = 0x8000_0005;
 
-// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 //  Entry Point
-// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Dispatches a registry tool action and returns a JSON result string.
 ///
@@ -76,9 +81,9 @@ pub fn handle_registry_editor(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 //  Helpers
-// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Extracts a required string parameter from the JSON params object.
 fn get_param_str<'a>(ctx: ErrorContext, params: &'a Value, key: &str) -> std::result::Result<&'a str, AetherError> {
@@ -112,7 +117,7 @@ fn resolve_hive(ctx: ErrorContext, hive: &str) -> std::result::Result<windows_re
         "HKU" | "HKEY_USERS" => Ok(USERS.as_raw()),
         "HKCR" | "HKEY_CLASSES_ROOT" => Ok(CLASSES_ROOT.as_raw()),
         "HKCC" | "HKEY_CURRENT_CONFIG" => {
-            Ok(0x80000005u32 as *mut std::ffi::c_void)
+            Ok(HKEY_CURRENT_CONFIG_RAW as *mut std::ffi::c_void)
         }
         _ => Err(AetherError::invalid_param(ctx, format!(
             "Unknown hive: {hive}"
@@ -139,7 +144,7 @@ fn resolve_hive_raw(ctx: ErrorContext, hive: &str) -> std::result::Result<WinHKE
         "HKCR" | "HKEY_CLASSES_ROOT" => {
             Ok(WinHKEY(CLASSES_ROOT.as_raw()))
         }
-        "HKCC" | "HKEY_CURRENT_CONFIG" => Ok(WinHKEY(0x8000_0005u32 as *mut std::ffi::c_void)),
+        "HKCC" | "HKEY_CURRENT_CONFIG" => Ok(WinHKEY(HKEY_CURRENT_CONFIG_RAW as *mut std::ffi::c_void)),
         _ => Err(AetherError::invalid_param(ctx, format!(
             "Unknown hive: {hive}"
         ))),
@@ -207,11 +212,11 @@ fn key_display(hive: &str, key_path: &str) -> String {
     format!("{hive}\\{key_path}")
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════════
-//  Action Handlers
-// ═══════════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Action Handlers (alphabetically ordered)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ── read ────────────────────────────────────────────────────────────────────────
+// ── read ───────────────────────────────────────────────────────────────────────
 
 /// Reads a registry value, detecting its type automatically.
 ///
@@ -249,7 +254,7 @@ fn handle_read(params: Value) -> std::result::Result<String, AetherError> {
     ), None))
 }
 
-// ── write ───────────────────────────────────────────────────────────────────────
+// ── write ──────────────────────────────────────────────────────────────────────
 
 /// Writes a registry value.
 ///
@@ -396,7 +401,7 @@ fn write_binary_value(ctx: ErrorContext, params: &Value, key: &Key, name: &str) 
         .map_err(|e| AetherError::win32(ctx, "RegSetValue", format!("set_value for binary failed: {e}")))
 }
 
-// ── delete ──────────────────────────────────────────────────────────────────────
+// ── delete ─────────────────────────────────────────────────────────────────────
 
 /// Deletes a registry value or an entire key (and all subkeys).
 ///
@@ -450,7 +455,7 @@ fn handle_delete(params: Value) -> std::result::Result<String, AetherError> {
     }
 }
 
-// ── enumerate ───────────────────────────────────────────────────────────────────
+// ── enumerate ──────────────────────────────────────────────────────────────────
 
 /// Enumerates subkeys and values under a registry key.
 ///
@@ -489,7 +494,7 @@ fn handle_enumerate(params: Value) -> std::result::Result<String, AetherError> {
     .to_string())
 }
 
-// ── security_get ────────────────────────────────────────────────────────────────
+// ── security_get ───────────────────────────────────────────────────────────────
 
 /// Retrieves the security descriptor (SDDL string) of a registry key.
 ///
@@ -575,7 +580,7 @@ fn handle_security_get(params: Value) -> std::result::Result<String, AetherError
     .to_string())
 }
 
-// ── security_set ────────────────────────────────────────────────────────────────
+// ── security_set ───────────────────────────────────────────────────────────────
 
 /// Sets the security descriptor of a registry key from an SDDL string.
 ///
@@ -638,7 +643,7 @@ fn handle_security_set(params: Value) -> std::result::Result<String, AetherError
     .to_string())
 }
 
-// ── monitor ─────────────────────────────────────────────────────────────────────
+// ── monitor ────────────────────────────────────────────────────────────────────
 
 /// Registers a change notification on a registry key.
 ///
@@ -696,7 +701,7 @@ fn handle_monitor(params: Value) -> std::result::Result<String, AetherError> {
     .to_string())
 }
 
-// ── export ──────────────────────────────────────────────────────────────────────
+// ── export ─────────────────────────────────────────────────────────────────────
 
 /// Exports a registry key to a `.reg` file using the system `reg export` command.
 ///
@@ -708,17 +713,16 @@ fn handle_export(params: Value) -> std::result::Result<String, AetherError> {
     let output_path = get_param_str(ctx.clone(), &params, "output_path")?;
 
     let full_key = format!("{hive}\\{key_path}");
-    let output = Command::new("reg")
-        .args(["export", &full_key, output_path, "/y"])
-        .output()
-        .map_err(|e| AetherError::Io(format!("{e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::win32(ctx, "reg export", format!(
-            "reg export failed for '{full_key}': {stderr}"
-        )));
-    }
+    SafeCommand::new("reg", "registry_editor", "export")
+        .timeout(60)
+        .arg_unchecked("export")
+        .arg(&full_key, ParamType::SafeString)?
+        .arg(output_path, ParamType::Path)?
+        .arg_unchecked("/y")
+        .run()
+        .map_err(|e| AetherError::win32(ctx, "reg export", format!(
+            "reg export failed for '{full_key}': {e}"
+        )))?;
 
     audit::log_success("registry", "export", &format!("{full_key} → {output_path}"));
     Ok(json!({
@@ -729,7 +733,7 @@ fn handle_export(params: Value) -> std::result::Result<String, AetherError> {
     .to_string())
 }
 
-// ── import ───────────────────────────────────────────────────────────────────────
+// ── import ──────────────────────────────────────────────────────────────────────
 
 /// Imports a `.reg` file into the registry using the system `reg import` command.
 ///
@@ -740,17 +744,14 @@ fn handle_import(params: Value) -> std::result::Result<String, AetherError> {
 
     let input_path = get_param_str(ctx.clone(), &params, "input_path")?;
 
-    let output = Command::new("reg")
-        .args(["import", input_path])
-        .output()
-        .map_err(|e| AetherError::Io(format!("{e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::win32(ctx, "reg import", format!(
-            "reg import failed for '{input_path}': {stderr}"
-        )));
-    }
+    SafeCommand::new("reg", "registry_editor", "import")
+        .timeout(60)
+        .arg_unchecked("import")
+        .arg(input_path, ParamType::Path)?
+        .run()
+        .map_err(|e| AetherError::win32(ctx, "reg import", format!(
+            "reg import failed for '{input_path}': {e}"
+        )))?;
 
     audit::log_forced("registry", &format!("import:{input_path}"));
     Ok(json!({
@@ -760,7 +761,7 @@ fn handle_import(params: Value) -> std::result::Result<String, AetherError> {
     .to_string())
 }
 
-// ── offline_mount ───────────────────────────────────────────────────────────────
+// ── offline_mount ──────────────────────────────────────────────────────────────
 
 /// Mounts an offline registry hive into the active registry.
 ///
@@ -810,7 +811,7 @@ fn handle_offline_mount(server: &AetherServer, params: Value) -> std::result::Re
     .to_string())
 }
 
-// ── offline_unmount ─────────────────────────────────────────────────────────────
+// ── offline_unmount ────────────────────────────────────────────────────────────
 
 /// Unmounts a previously mounted offline registry hive.
 ///

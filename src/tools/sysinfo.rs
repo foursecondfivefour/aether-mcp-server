@@ -15,27 +15,28 @@ use std::ptr;
 use std::thread;
 use std::time::Duration;
 
-use windows::core::{PCWSTR, PWSTR, w, s};
+use windows::core::{s, w, PCWSTR, PWSTR};
+use windows::Win32::Devices::DeviceAndDriverInstallation::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Storage::FileSystem::*;
+use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Power::*;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::SystemInformation::*;
 use windows::Win32::System::Threading::*;
-use windows::Win32::Devices::DeviceAndDriverInstallation::*;
-use windows::Win32::System::IO::DeviceIoControl;
-use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Constants
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
+/// IOCTL code for retrieving physical disk geometry.
 const IOCTL_DISK_GET_DRIVE_GEOMETRY: u32 = 0x00070000;
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helper: read a registry string value
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn reg_read_string(ctx: &ErrorContext, hkey: HKEY, subkey: &str, value_name: &str) -> std::result::Result<String, AetherError> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
@@ -102,9 +103,9 @@ unsafe fn reg_read_string(ctx: &ErrorContext, hkey: HKEY, subkey: &str, value_na
     Ok(String::from_utf16_lossy(wide))
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helper: enumerate subkeys of a registry key
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn reg_enum_subkeys(hkey: HKEY, subkey: &str) -> std::result::Result<Vec<String>, AetherError> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
@@ -147,9 +148,9 @@ unsafe fn reg_enum_subkeys(hkey: HKEY, subkey: &str) -> std::result::Result<Vec<
     Ok(names)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helper: read all values from a registry key as JSON
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn reg_read_all_values_to_json(hkey: HKEY, subkey: &str) -> std::result::Result<serde_json::Value, AetherError> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
@@ -221,17 +222,17 @@ unsafe fn reg_read_all_values_to_json(hkey: HKEY, subkey: &str) -> std::result::
     Ok(serde_json::Value::Object(map))
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Helper: wide string from &str
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: cpu_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_cpu_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
@@ -343,9 +344,9 @@ unsafe fn action_cpu_info(ctx: &ErrorContext) -> std::result::Result<String, Aet
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: memory_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_memory_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut mem_ex: MEMORYSTATUSEX = mem::zeroed();
@@ -369,9 +370,9 @@ unsafe fn action_memory_info(ctx: &ErrorContext) -> std::result::Result<String, 
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: disk_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_disk_info(_ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let drives_mask = GetLogicalDrives();
@@ -522,9 +523,9 @@ unsafe fn action_disk_info(_ctx: &ErrorContext) -> std::result::Result<String, A
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: os_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_os_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
@@ -593,9 +594,9 @@ unsafe fn action_os_info(ctx: &ErrorContext) -> std::result::Result<String, Aeth
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: uptime
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_uptime() -> std::result::Result<String, AetherError> {
     let ticks = unsafe { GetTickCount64() };
@@ -619,9 +620,9 @@ fn action_uptime() -> std::result::Result<String, AetherError> {
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: env_vars
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_env_vars(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let sub_action = params.get("action").and_then(|v| v.as_str()).unwrap_or("list");
@@ -681,9 +682,9 @@ unsafe fn action_env_vars(ctx: &ErrorContext, params: &serde_json::Value) -> std
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: power_plans
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_power_plans(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut plans = Vec::new();
@@ -834,9 +835,9 @@ fn action_power_plans_fallback(ctx: &ErrorContext) -> std::result::Result<String
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: power_set_plan
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_power_set_plan(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -867,9 +868,9 @@ unsafe fn action_power_set_plan(ctx: &ErrorContext, params: &serde_json::Value) 
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: power_query
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_power_query(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
@@ -911,9 +912,9 @@ unsafe fn action_power_query(ctx: &ErrorContext) -> std::result::Result<String, 
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: battery
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_battery(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut sps: SYSTEM_POWER_STATUS = mem::zeroed();
@@ -975,9 +976,9 @@ unsafe fn action_battery(ctx: &ErrorContext) -> std::result::Result<String, Aeth
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: device_list
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_device_list(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let class_guid = windows::core::GUID::zeroed();
@@ -1092,9 +1093,9 @@ unsafe fn action_device_list(ctx: &ErrorContext) -> std::result::Result<String, 
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: driver_list
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_driver_list(ctx: &ErrorContext) -> Result<String, AetherError> {
     let _ = ctx;
@@ -1146,9 +1147,9 @@ fn action_driver_list(ctx: &ErrorContext) -> Result<String, AetherError> {
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: bios_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_bios_info(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let bios_key = r"HARDWARE\DESCRIPTION\System\BIOS";
@@ -1178,9 +1179,9 @@ unsafe fn action_bios_info(ctx: &ErrorContext) -> std::result::Result<String, Ae
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: time_get
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_time_get() -> std::result::Result<String, AetherError> {
     let now = std::time::SystemTime::now();
@@ -1260,9 +1261,9 @@ fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: time_set
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_time_set(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1303,9 +1304,9 @@ fn action_time_set(ctx: &ErrorContext, params: &serde_json::Value) -> std::resul
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: ntp_sync
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_ntp_sync(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let _ = ctx;
@@ -1325,9 +1326,9 @@ fn action_ntp_sync(ctx: &ErrorContext) -> std::result::Result<String, AetherErro
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: installed_software
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_installed_software(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut software = Vec::new();
@@ -1388,9 +1389,9 @@ unsafe fn action_installed_software(ctx: &ErrorContext) -> std::result::Result<S
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: windows_update
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_windows_update() -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
@@ -1442,9 +1443,9 @@ fn action_windows_update() -> std::result::Result<String, AetherError> {
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: startup_programs
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_startup_programs() -> std::result::Result<String, AetherError> {
     let mut programs = Vec::new();
@@ -1543,9 +1544,9 @@ unsafe fn action_startup_programs() -> std::result::Result<String, AetherError> 
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: restore_points
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     let action = params.get("action").and_then(|v| v.as_str()).unwrap_or("list");
@@ -1614,9 +1615,9 @@ fn action_restore_points(ctx: &ErrorContext, params: &serde_json::Value) -> std:
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: perf_counters
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 unsafe fn action_perf_counters(ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
@@ -1658,9 +1659,9 @@ unsafe fn action_perf_counters(ctx: &ErrorContext) -> std::result::Result<String
     Ok(output)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: bcd_list
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_bcd_list(server: &AetherServer, ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     server
@@ -1717,9 +1718,9 @@ fn action_bcd_list(server: &AetherServer, ctx: &ErrorContext) -> std::result::Re
     Ok(output_str)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: bcd_get_entry / bcd_set_entry
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_bcd_get_entry(server: &AetherServer, ctx: &ErrorContext, params: &serde_json::Value) -> std::result::Result<String, AetherError> {
     server
@@ -1794,9 +1795,9 @@ fn action_bcd_set_entry(server: &AetherServer, ctx: &ErrorContext, params: &serd
     Ok(output_str)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: crashdump_info / crashdump_configure
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn action_crashdump_info(server: &AetherServer, ctx: &ErrorContext) -> std::result::Result<String, AetherError> {
     server
@@ -1931,9 +1932,9 @@ fn action_crashdump_configure(server: &AetherServer, ctx: &ErrorContext, params:
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Main dispatch: handle_system_info
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Handle all system information tool actions.
 ///

@@ -1,39 +1,39 @@
-//! AETHER_01 — Filesystem MCP tool.
+//! Filesystem MCP tool for AETHER_01.
 //!
-//! Full-spectrum Windows filesystem operations: read/write/delete, copy/move,
-//! directory listing (recursive with glob), stat, mkdir, ACL management via icacls,
-//! symlinks/junctions, Alternate Data Streams (ADS), NTFS compression, EFS encryption,
-//! volume enumeration, mount/unmount via NTFS mount points, and network share management.
+//! 22 actions covering: read/write/delete, copy/move, directory listing
+//! (recursive with glob), stat, mkdir, ACL management (icacls),
+//! symlinks/junctions, Alternate Data Streams (ADS), NTFS compression,
+//! EFS encryption, volume enumeration, mount/unmount (NTFS mount points),
+//! and network shares.
+
 #![allow(unsafe_code)]
-
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
-use serde_json::{json, Value};
 
 use crate::audit;
 use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
 
-// ---------------------------------------------------------------------------
-// Windows API imports (windows crate 0.58)
-// ---------------------------------------------------------------------------
+use serde_json::{json, Value};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 use windows::core::HSTRING;
 use windows::Win32::Storage::FileSystem::{
     DeleteVolumeMountPointW, GetDiskFreeSpaceExW, GetLogicalDrives, GetVolumeInformationW,
     SetVolumeMountPointW,
 };
 
-// ---------------------------------------------------------------------------
-// Tool name constant used for audit logging
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Tool name for audit logging.
 const TOOL: &str = "filesystem";
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // PUBLIC DISPATCH FUNCTION
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Dispatch filesystem actions by name.
 ///
@@ -74,9 +74,9 @@ pub fn handle_file_system(action: &str, params: Value) -> std::result::Result<St
     }
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 1. read
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_read(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "read");
@@ -89,9 +89,9 @@ fn fs_read(params: Value) -> std::result::Result<String, AetherError> {
     Ok(content)
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 2. write
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_write(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "write");
@@ -103,9 +103,9 @@ fn fs_write(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 3. delete — requires force: true
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_delete(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "delete");
@@ -128,9 +128,9 @@ fn fs_delete(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "deleted": path.to_string_lossy() }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 4. copy / move
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_copy(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "copy");
@@ -176,9 +176,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 5. list_dir — recursive directory listing with optional glob mask
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_list_dir(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "list_dir");
@@ -247,9 +247,9 @@ fn dir_entry_to_json(entry: &fs::DirEntry) -> Value {
     })
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 6. stat — file attributes
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_stat(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "stat");
@@ -291,9 +291,9 @@ fn fs_stat(params: Value) -> std::result::Result<String, AetherError> {
     Ok(result.to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 7. mkdir — create directory recursively
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_mkdir(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "mkdir");
@@ -304,9 +304,9 @@ fn fs_mkdir(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 8. acl_get — get file permissions via icacls
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_acl_get(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "acl_get");
@@ -358,9 +358,9 @@ fn parse_icacls_output(output: &str) -> Value {
     Value::Object(map)
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 9. acl_set — set file permissions via icacls /grant
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_acl_set(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "acl_set");
@@ -379,9 +379,9 @@ fn fs_acl_set(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "path": path.to_string_lossy() }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 10. symlink — create symbolic link, hard link, or junction
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "symlink");
@@ -438,9 +438,9 @@ fn fs_symlink(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "link": link.to_string_lossy(), "target": target.to_string_lossy(), "link_type": link_type }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 11. ADS — Alternate Data Streams
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_ads_list(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "ads_list");
@@ -526,9 +526,9 @@ fn fs_ads_delete(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "deleted": ads_path }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 12. compress / uncompress — NTFS compression via compact.exe
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_compress(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "compress");
@@ -558,9 +558,9 @@ fn fs_uncompress(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 13. encrypt / decrypt — EFS encryption via cipher.exe
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_encrypt(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "encrypt");
@@ -590,9 +590,9 @@ fn fs_decrypt(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "output": stdout }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 14. volumes — list logical drives with metadata
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_volumes() -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "volumes");
@@ -685,9 +685,9 @@ fn get_disk_free_space(root: &str) -> (u64, u64, u64) {
     }
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 15. mount / unmount — NTFS volume mount points
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_mount(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "mount");
@@ -743,9 +743,9 @@ fn fs_unmount(params: Value) -> std::result::Result<String, AetherError> {
     Ok(json!({ "ok": true, "mount_point": mount_with_slash }).to_string())
 }
 
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 // 16. shares — network shares (list, create, delete)
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn fs_shares(params: Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("file_system", "shares");
@@ -849,9 +849,9 @@ fn shares_delete(ctx: ErrorContext, params: Value) -> std::result::Result<String
     Ok(json!({ "ok": true, "name": name }).to_string())
 }
 
-// ===========================================================================
-// HELPERS — path canonicalization, param extraction, glob matching, time fmt
-// ===========================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helpers — path canonicalization, param extraction, glob matching, time fmt
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Canonicalize a path that MUST exist (read, stat, acl_get, etc.).
 fn canonicalize_path_required(ctx: ErrorContext, path_str: &str) -> std::result::Result<PathBuf, AetherError> {

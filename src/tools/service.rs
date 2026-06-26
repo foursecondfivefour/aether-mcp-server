@@ -1,8 +1,8 @@
 //! Windows Service Control Manager tool for AETHER_01.
 //!
-//! Provides full service lifecycle management: list, start, stop, restart,
+//! Full service lifecycle management: list, start, stop, restart,
 //! query configuration, query status, set startup type, and list drivers.
-//! All operations are performed via the Windows Service Control Manager API.
+//! All operations are performed via the Win32 SCM API.
 //!
 //! # Safety
 //!
@@ -17,13 +17,17 @@ use std::time::{Duration, Instant};
 
 use crate::audit;
 use crate::error::{AetherError, ErrorContext};
+
 use serde_json::json;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::System::Services::*;
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Constants
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Tool name for audit logging.
+const TOOL: &str = "service_manager";
 
 /// Polling interval (ms) when waiting for service status transitions.
 const POLL_INTERVAL_MS: u64 = 250;
@@ -33,17 +37,17 @@ const MAX_WAIT_MS: u64 = 30_000;
 
 /// Sentinel value passed to `ChangeServiceConfigW` to leave an existing
 /// setting unchanged.
-const SERVICE_NO_CHANGE_RAW: u32 = 0xFFFF_FFFF;
+const SERVICE_NO_CHANGE: u32 = 0xFFFF_FFFF;
 
 /// Initial buffer size for `EnumServicesStatusExW` (256 KiB).
 const ENUM_BUFFER_INITIAL: u32 = 262_144;
 
-/// Maximum number of buffer-growth attempts.
+/// Maximum number of buffer-growth attempts during enumeration.
 const ENUM_MAX_RETRIES: u32 = 4;
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Public entry point
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Dispatch the given `action` with its JSON `params`.
 ///
@@ -108,9 +112,9 @@ pub fn handle_service_manager(
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // JSON parameter helpers
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn required_str(ctx: &ErrorContext, params: &serde_json::Value, key: &str) -> std::result::Result<String, AetherError> {
     params
@@ -131,9 +135,9 @@ fn optional_bool(params: &serde_json::Value, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // String ↔ wide-string conversion
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Encode a Rust `&str` as a null-terminated UTF-16 vector suitable for
 /// constructing a `PCWSTR`.
@@ -156,9 +160,9 @@ unsafe fn pwstr_to_owned(p: PWSTR) -> String {
         .to_string()
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Status / type → human-readable string
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn status_to_string(state: SERVICE_STATUS_CURRENT_STATE) -> &'static str {
     match state {
@@ -207,9 +211,9 @@ fn parse_start_type(ctx: &ErrorContext, raw: &str) -> std::result::Result<SERVIC
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // SCM handle helpers
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Open the Service Control Manager with the requested access mask.
 unsafe fn open_scm(ctx: &ErrorContext, access: u32) -> std::result::Result<SC_HANDLE, AetherError> {
@@ -239,9 +243,9 @@ unsafe fn open_svc(
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // State-polling helper
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Poll `QueryServiceStatusEx` until the service reaches `desired_state`
 /// or `MAX_WAIT_MS` elapses.
@@ -290,9 +294,9 @@ unsafe fn wait_for_state(
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: list
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Query the startup type for a single service by name.
 /// The SCM handle must already be open.
@@ -428,9 +432,9 @@ fn list_services() -> std::result::Result<String, AetherError> {
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: start
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn start_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
@@ -488,9 +492,9 @@ fn start_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Re
     Ok(serde_json::to_string(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: stop
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn stop_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
@@ -549,9 +553,9 @@ fn stop_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Res
     Ok(serde_json::to_string(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: restart
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn restart_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::Result<String, AetherError> {
     if !force {
@@ -629,9 +633,9 @@ fn restart_service(ctx: &ErrorContext, name: &str, force: bool) -> std::result::
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: query_config
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn query_service_config(ctx: &ErrorContext, name: &str) -> std::result::Result<String, AetherError> {
     let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
@@ -691,9 +695,9 @@ fn query_service_config(ctx: &ErrorContext, name: &str) -> std::result::Result<S
     Ok(serde_json::to_string(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: query_status
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn query_service_status(ctx: &ErrorContext, name: &str) -> std::result::Result<String, AetherError> {
     let scm = unsafe { open_scm(ctx, SC_MANAGER_CONNECT) }.map_err(|e| {
@@ -752,9 +756,9 @@ fn query_service_status(ctx: &ErrorContext, name: &str) -> std::result::Result<S
     Ok(serde_json::to_string(&result)?)
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: set_startup
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn set_startup_type(ctx: &ErrorContext, name: &str, startup: &str, force: bool) -> std::result::Result<String, AetherError> {
     let new_type = parse_start_type(ctx, startup)?;
@@ -788,9 +792,9 @@ fn set_startup_type(ctx: &ErrorContext, name: &str, startup: &str, force: bool) 
     let result = unsafe {
         ChangeServiceConfigW(
             svc,
-            ENUM_SERVICE_TYPE(SERVICE_NO_CHANGE_RAW),   // dwServiceType
+            ENUM_SERVICE_TYPE(SERVICE_NO_CHANGE),   // dwServiceType
             new_type,                                    // dwStartType
-            SERVICE_ERROR(SERVICE_NO_CHANGE_RAW),        // dwErrorControl
+            SERVICE_ERROR(SERVICE_NO_CHANGE),        // dwErrorControl
             PCWSTR::null(),                              // lpBinaryPathName
             PCWSTR::null(),                              // lpLoadOrderGroup
             None,                                        // lpdwTagId
@@ -825,9 +829,9 @@ fn set_startup_type(ctx: &ErrorContext, name: &str, startup: &str, force: bool) 
     }
 }
 
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 // Action: drivers
-// ---------------------------------------------------------------------------
+// ═══════════════════════════════════════════════════════════════════════════════
 
 fn list_drivers(ctx: &ErrorContext, filter: Option<&str>) -> std::result::Result<String, AetherError> {
     let scm =
