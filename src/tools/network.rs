@@ -1,4 +1,6 @@
-#![allow(unsafe_code)]//! Network management tool for AETHER_01 MCP server.
+#![allow(unsafe_code)]
+
+//! Network management tool for AETHER_01 MCP server.
 //!
 //! 13 actions: adapters, connections, dns_cache, firewall_rules,
 //! firewall_profiles, proxy, routing_table, network_stats, wifi_profiles,
@@ -9,6 +11,7 @@
 use crate::audit;
 use crate::command::{ParamType, SafeCommand};
 use crate::error::{AetherError, ErrorContext};
+use crate::tools::common;
 
 use serde_json::{json, Value};
 use std::mem;
@@ -788,7 +791,7 @@ fn action_proxy(params: &Value) -> std::result::Result<String, AetherError> {
     }
 
     // Fallback to registry
-    let reg_val = |name: &str| -> String {
+    let reg_val = |name: &str| -> Result<String, AetherError> {
         SafeCommand::new("reg", "network", "proxy_reg_fallback")
             .timeout(15)
             .arg_unchecked("query")
@@ -796,21 +799,23 @@ fn action_proxy(params: &Value) -> std::result::Result<String, AetherError> {
             .arg_unchecked("/v")
             .arg(name, ParamType::Name)?
             .output()
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| l.contains("REG_"))
-            .filter_map(|l| l.split_whitespace().last())
-            .next()
-            .unwrap_or("")
-            .to_string()
+            .map(|s| {
+                s.lines()
+                    .filter(|l| l.contains("REG_"))
+                    .filter_map(|l| l.split_whitespace().last())
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
     };
 
-    let enabled = reg_val("ProxyEnable").to_lowercase() == "0x1";
+    let enabled_val = reg_val("ProxyEnable").unwrap_or_default();
+    let enabled = enabled_val.to_lowercase() == "0x1";
     Ok(json!({
         "source": "registry",
         "proxy_enabled": enabled,
-        "proxy_server": reg_val("ProxyServer"),
-        "proxy_override": reg_val("ProxyOverride"),
+        "proxy_server": reg_val("ProxyServer").unwrap_or_default(),
+        "proxy_override": reg_val("ProxyOverride").unwrap_or_default(),
     }).to_string())
 }
 
@@ -1150,20 +1155,28 @@ fn action_bluetooth_devices() -> std::result::Result<String, AetherError> {
 
 fn action_hosts_file(params: &Value) -> std::result::Result<String, AetherError> {
     let ctx = ErrorContext::new("network_manager", "hosts_file");
-    let path = Path::new(r"C:\Windows\System32\drivers\etc\hosts");
+    let path_str = r"C:\Windows\System32\drivers\etc\hosts";
+    let path = Path::new(path_str);
     let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if force {
         let content = params.get("content").and_then(|v| v.as_str())
             .ok_or_else(|| AetherError::invalid_param(ctx.clone(), "content field required for write"))?;
         audit::log_forced("network", "hosts_write");
-        std::fs::write(path, content.as_bytes())
-            .map_err(|e| AetherError::permission_denied(ctx.clone(), format!("Cannot write hosts: {e}")))?;
+        // Write via PowerShell for consistent audit trail
+        let script = format!(
+            "Set-Content -Path '{}' -Value '{}' -Encoding UTF8 -Force -ErrorAction Stop",
+            path_str.replace('\'', "''"),
+            content.replace('\'', "''")
+        );
+        common::ps_output(&script, "network")?;
         return Ok(json!({"status":"written","path":path.to_string_lossy()}).to_string());
     }
 
+    // Read via std::fs (safe for read-only, no injection risk) + explicit audit
     let text = std::fs::read_to_string(path)
         .map_err(|e| AetherError::not_found(ctx.clone(), format!("hosts file: {e}"), None))?;
+    audit::log_success("network", "hosts_read", &format!("{} bytes", text.len()));
 
     let mut entries = Vec::new();
     for line in text.lines() {

@@ -1393,18 +1393,15 @@ unsafe fn action_installed_software(ctx: &ErrorContext) -> std::result::Result<S
 // Action: windows_update
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn action_windows_update() -> std::result::Result<String, AetherError> {
+unsafe fn action_windows_update() -> std::result::Result<String, AetherError> {
     let mut result = serde_json::Map::new();
 
     let wu_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate";
-    // reg_read_all_values_to_json doesn't need ctx since it never errors
-    let ctx_unused = ErrorContext::new("system_info", "windows_update");
-    unsafe {
-        if let Ok(settings) = reg_read_all_values_to_json(HKEY_LOCAL_MACHINE, wu_key) {
-            result.insert("settings".into(), settings);
-        }
-        let _ = ctx_unused; // suppress unused warning
+    let ctx = ErrorContext::new("system_info", "windows_update");
+    if let Ok(settings) = reg_read_all_values_to_json(HKEY_LOCAL_MACHINE, wu_key) {
+        result.insert("settings".into(), settings);
     }
+    let _ = ctx; // suppress unused warning
 
     let qfe = SafeCommand::new("wmic", "sysinfo", "windows_update")
         .timeout(30)
