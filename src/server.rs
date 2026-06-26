@@ -4,13 +4,13 @@ use crate::config::FeatureGates;
 use crate::tools;
 
 use rmcp::{
+    ErrorData as McpError,
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::*,
-    schemars, tool, tool_router, tool_handler,
+    schemars, service::{RequestContext, RoleServer}, tool, tool_router, tool_handler,
 };
 use serde::Deserialize;
-use std::future::Future;
 
 // ── JSON parsing limits ───────────────────────────────────────────────────
 //
@@ -155,7 +155,14 @@ impl ServerHandler for AetherServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: Default::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().enable_logging().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_logging()
+                .enable_prompts()
+                .enable_prompts_list_changed()
+                .enable_resources()
+                .enable_resources_list_changed()
+                .build(),
             server_info: Implementation {
                 name: "AETHER_01".to_string(),
                 version: "1.1.0".to_string(),
@@ -167,6 +174,95 @@ impl ServerHandler for AetherServer {
                 Feature gates in `.env` control critically dangerous capabilities."
                     .to_string(),
             ),
+        }
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(vec![
+            Prompt::new(
+                "analyze-system",
+                Some("Analyze Windows system status and security posture"),
+                Some(vec![
+                    PromptArgument {
+                        name: "level".to_string(),
+                        description: Some(
+                            "Analysis depth: basic, deep, full".to_string(),
+                        ),
+                        required: Some(false),
+                    },
+                ]),
+            ),
+        ]))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        if request.name == "analyze-system" {
+            Ok(GetPromptResult {
+                description: Some(
+                    "Analyze Windows system status and security posture"
+                        .to_string(),
+                ),
+                messages: vec![PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    "Perform a comprehensive Windows system analysis covering:\n\
+                     - OS version, uptime, installed software\n\
+                     - Running processes and services\n\
+                     - Security posture (Defender, UAC, firewall, BitLocker)\n\
+                     - Network configuration and active connections\n\
+                     - Disk health and memory status",
+                )],
+            })
+        } else {
+            Err(McpError::invalid_request(
+                format!("Unknown prompt: {}", request.name),
+                None,
+            ))
+        }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            RawResource::new("system://status", "System Status")
+                .no_annotation(),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        if request.uri == "system://status" {
+            Ok(ReadResourceResult {
+                contents: vec![ResourceContents::text(
+                    "AETHER_01 — Windows MCP Server\n\
+                     Status: Operational\n\
+                     Platform: Windows 10/11 x86-64\n\
+                     Version: 1.1.0\n\
+                     Tools: 10 (process, file, registry, service, GUI, system, network, user, security, automation)\n\
+                     Prompts: 1 (analyze-system)\n\
+                     Resources: 1 (system://status)\n\
+                     Security: SafeCommand, feature gates, audit trail, input validation",
+                    "system://status",
+                )],
+            })
+        } else {
+            Err(McpError::invalid_request(
+                format!("Unknown resource: {}", request.uri),
+                None,
+            ))
         }
     }
 }

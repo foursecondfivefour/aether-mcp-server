@@ -25,6 +25,13 @@
 
 <p align="center">
   <a href="https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1"><img src="https://img.shields.io/badge/PowerShell-One--Click%20Install-5391FE?logo=powershell&logoColor=white&style=for-the-badge" alt="Install via PowerShell" /></a>
+  <a href="https://mcp.lobehub.com/mcp/servers/github.com/foursecondfivefour/aether-mcp-server">
+    <img src="https://img.shields.io/badge/LobeHub-MCP%20Server-5B5BD6?logo=lobehub&logoColor=white&style=for-the-badge" alt="LobeHub MCP Server" />
+  </a>
+</p>
+
+<p align="center">
+  <b>✓ Tools · ✓ Prompts · ✓ Resources</b>
 </p>
 
 **AETHER_01** is a Rust-based [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives AI assistants comprehensive Windows management capabilities through standard I/O. From process control to GUI automation, registry editing to WMI queries — everything a systems administrator needs, delivered through a secure, auditable, zero-network interface.
@@ -47,6 +54,18 @@
 | 10 | `system_automation` | Event Log querying, scheduled tasks, WMI queries |
 
 `*` = Disabled by default; enabled via `.env` feature gates.
+
+### 📝 Prompts
+
+| Prompt | Description | Arguments |
+|--------|-------------|-----------|
+| `analyze-system` | Analyze Windows system status and security posture | `level` (optional): basic, deep, full |
+
+### 📦 Resources
+
+| Resource | Description | Type |
+|----------|-------------|------|
+| `system://status` | Current Windows system status overview | text/plain |
 
 ---
 
