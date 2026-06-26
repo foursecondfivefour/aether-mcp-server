@@ -1,42 +1,42 @@
 ---
 name: Feature Request
-about: Предложить новую возможность
-title: "[FEATURE] "
+about: Suggest an idea for AETHER_01
+title: ''
 labels: enhancement
 assignees: ''
+
 ---
 
-## Описание
+## Problem Statement
 
-<!-- Чётко опишите, какую возможность вы хотите добавить -->
+Is your feature request related to a problem? Please describe.
+A clear and concise description of what the problem is.
 
-## Инструмент и действие
+**Example:** "I'm always frustrated when [...]"
 
-- Какой инструмент: `<!-- process_control / file_system / ... -->`
-- Какое новое действие: `<!-- например, format_disk -->`
+## Proposed Solution
 
-## Зачем это нужно
+A clear and concise description of what you want to happen.
 
-<!-- Какую проблему это решает -->
+### Tool Fit
 
-## Предлагаемое API
+Which AETHER_01 tool would this feature belong to?
+- [ ] `process_control`
+- [ ] `file_system`
+- [ ] `registry_editor`
+- [ ] `service_manager`
+- [ ] `gui_automation`
+- [ ] `system_info`
+- [ ] `network_manager`
+- [ ] `user_management`
+- [ ] `security_audit`
+- [ ] `system_automation`
+- [ ] New tool
 
-```json
-{
-  "action": "new_action",
-  "params": {
-    "param1": "...",
-    "param2": "..."
-  }
-}
-```
+## Alternatives Considered
 
-## Уровень опасности
+A clear and concise description of any alternative solutions or features you've considered.
 
-- [ ] Безопасно (только чтение)
-- [ ] Средний (запись в пользовательские данные)
-- [ ] Опасный (запись в систему, требует `force: true` + feature gate)
+## Additional Context
 
-## Альтернативы
-
-<!-- Есть ли другие способы решить эту проблему -->
+Add any other context, screenshots, or examples about the feature request here.

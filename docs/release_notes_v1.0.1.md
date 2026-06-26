@@ -1,31 +1,31 @@
-# AETHER_01 v1.0.1 — Hardened Release
+# Release Notes: v1.0.1
 
-**Windows x86-64 | Rust 1.85+ | 2.65 MB**
+**Windows x86-64 · Rust 1.85+ · 2.65 MB**
 
 ---
 
-## What's New Since v1.0.0
+## What's New
 
 ### Testing & Quality
-- **79 unit + integration tests** — all passing, covering error formatting, config loading, tool dispatch, and 9 out of 10 tools with real Win32 API calls
-- **0 compiler warnings** — all 68 warnings resolved across 8 source files
+- **79 tests** — unit + integration, covering error formatting, config, tool dispatch, and 9/10 tools with real Win32 API calls
+- **0 compiler warnings** — all 68 warnings resolved
 
 ### Error Handling
-- **Structured error format** — RFC 9457-inspired ProblemDetails for consistent, machine-readable errors
-- **12 curated Win32 error translations** — human-readable descriptions for common Windows error codes
-- **No dead-end errors** — all error paths produce actionable messages
+- Structured ProblemDetails format (RFC 9457-inspired)
+- 12 curated Win32 error code translations
+- No dead-end error paths
 
 ### Architecture
-- **Dual crate layout** — the project is now both `[[bin]]` and `[lib]`, enabling integration tests
-- **Cleaner lib.rs split** — separation of binary entrypoint from library surface
+- Dual crate layout (`[[bin]]` + `[lib]`) for integration testing
+- Clean `main.rs` / `lib.rs` separation
 
 ### Developer Experience
-- **14+ IDE support** — the install script now includes an interactive menu for Cursor, VS Code, Claude Desktop, Windsurf, JetBrains, Zed, Cline, Continue, and Goose
-- **AI agent configuration** — `.agents/skills/`, `.cursor/rules/`, `CLAUDE.md`, `.windsurfrules`, and `.github/copilot-instructions.md` for better AI-assisted development
+- 14+ IDE support in install script (interactive menu)
+- AI agent configs: `.agents/skills/`, `.cursor/rules/`, `CLAUDE.md`, `.windsurfrules`
 
 ### Governance
-- **Code of Conduct** — `CODE_OF_CONDUCT.md` added
-- **Improved `.gitignore`** — cleaner source tree management
+- `CODE_OF_CONDUCT.md` added
+- Improved `.gitignore`
 
 ---
 
@@ -33,9 +33,9 @@
 
 | Property | Value |
 |----------|-------|
-| File | `aether-mcp-server.exe` |
-| Size | 2.65 MB |
-| SHA256 | `5516285AE0AB4164DA9A45C7D0BD5EDCD33EF75E8E82891F372C89853526A4D8` |
+| **File** | `aether-mcp-server.exe` |
+| **Size** | 2.65 MB |
+| **SHA256** | `5516285AE0AB4164DA9A45C7D0BD5EDCD33EF75E8E82891F372C89853526A4D8` |
 
 ### Compiler Hardening
 
@@ -48,7 +48,7 @@ control-flow-guard=yes  /GUARD:CF  /DYNAMICBASE
 
 ---
 
-## Quick Install
+## Install
 
 ```powershell
 irm https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1 | iex

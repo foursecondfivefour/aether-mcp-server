@@ -1,45 +1,37 @@
-## Summary
+## Description
 
-<!-- Кратко опишите, что делает этот PR -->
+Please include a summary of the change and which issue is fixed.
 
-## Type
+Fixes # (issue)
 
-<!-- Отметьте [x] подходящие типы -->
+## Type of Change
 
-- [ ] feat: новая возможность
-- [ ] fix: исправление ошибки
-- [ ] refactor: рефакторинг
-- [ ] docs: документация
-- [ ] perf: оптимизация производительности
-- [ ] security: изменение, связанное с безопасностью
-- [ ] ci: CI/CD изменения
+- [ ] Bug fix (non-breaking change that fixes an issue)
+- [ ] New feature (non-breaking change that adds functionality)
+- [ ] Breaking change (fix or feature that causes existing functionality to change)
+- [ ] Documentation update
+- [ ] Performance improvement
+- [ ] Security hardening
 
-## Changes
+## Checklist
 
-<!-- Какие файлы/модули изменены и почему -->
-
-## Risk Assessment
-
-- [ ] Низкий — косметические изменения, документация
-- [ ] Средний — изменения логики, требуется review
-- [ ] Высокий — затрагивает безопасность, Win32 API, опасные операции
+- [ ] `cargo fmt` passes
+- [ ] `cargo clippy` passes with no new warnings
+- [ ] `cargo check` passes
+- [ ] Tests added/updated for new functionality
+- [ ] Documentation updated
+- [ ] Dangerous operations include `force: true` gate
+- [ ] New feature gates added to `.env.example`
+- [ ] Audit logging added for all new operations
+- [ ] All external commands use `SafeCommand` (not raw `std::process::Command`)
 
 ## Test Plan
 
-- [ ] `cargo fmt` пройден
-- [ ] `cargo clippy` пройден
-- [ ] `cargo check` пройден
-- [ ] Ручное тестирование: <!-- опишите что и как тестировали -->
-- [ ] Проверка кириллицы в путях/значениях
+Describe how you tested your changes:
 
-## Security Checklist (для изменений, затрагивающих Win32 API)
+- [ ] Ran `cargo test`
+- [ ] Manual testing with MCP client (describe)
 
-- [ ] `force: true` проверяется для опасных операций
-- [ ] Пути каноникализируются перед файловыми операциями
-- [ ] Feature gates проверяются для gated-операций
-- [ ] Аудит-логирование добавлено для всех новых действий
-- [ ] Новые feature gates добавлены в `.env.example`
+## Additional Context
 
-## Screenshots
-
-<!-- Если применимо -->
+Add any other context about the PR here.

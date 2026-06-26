@@ -1,38 +1,41 @@
 ---
 name: Bug Report
-about: Сообщить об ошибке
-title: "[BUG] "
+about: Create a report to help us improve AETHER_01
+title: ''
 labels: bug
 assignees: ''
+
 ---
 
-## Описание ошибки
+## Describe the Bug
 
-<!-- Чётко опишите, что пошло не так -->
+A clear and concise description of what the bug is.
 
-## Как воспроизвести
+## To Reproduce
 
-1. Инструмент: `<!-- process_control / file_system / ... -->`
-2. Действие: `<!-- list / read / write / ... -->`
-3. Параметры: `<!-- {"action": "...", "params": {...}} -->`
+Steps to reproduce the behavior:
 
-## Ожидаемое поведение
+1. Start AETHER_01 with '...'
+2. Send tool call '...'
+3. See error
 
-<!-- Что должно было произойти -->
+## Expected Behavior
 
-## Фактическое поведение
+A clear and concise description of what you expected to happen.
 
-<!-- Что произошло на самом деле (сообщение об ошибке, скриншот) -->
+## Environment
 
-## Окружение
+- Windows version: [e.g. Windows 11 23H2]
+- AETHER_01 version: [e.g. v1.0.1]
+- AI client: [e.g. Cursor, Claude Desktop, VS Code]
+- Installation method: [e.g. one-click install, cargo build]
 
-- **Windows версия**: `<!-- 10 Pro 22H2 / 11 23H2 -->`
-- **Rust версия**: `<!-- rustc --version -->`
-- **Версия AETHER_01**: `<!-- commit hash -->`
-- **Feature gates (.env)**: `<!-- какие включены -->`
+## Logs
 
-## Лог (если применимо)
-
-```text
-<!-- Вывод MCP-сервера в stderr -->
 ```
+Paste any relevant logs or error output here.
+```
+
+## Additional Context
+
+Add any other context about the problem here.

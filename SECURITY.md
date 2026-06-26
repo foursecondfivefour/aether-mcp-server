@@ -4,73 +4,71 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.x     | ✅ Active |
+| 1.x     | ✅ Active development |
 
 ---
 
 ## Threat Model
 
-AETHER_01 is a **local, single-machine, stdio-only** MCP server. It does **not** open network ports, listen for incoming connections, or expose any remote API. Its entire attack surface consists of:
+AETHER_01 is a **local, single-machine, stdio-only** MCP server. It does **not** open network ports, listen for incoming connections, or expose any remote API. The entire attack surface is:
 
-1. **stdin** — MCP JSON-RPC messages from the AI client (local, same-machine, same-user)
-2. **Feature gates in `.env`** — configuration read from disk at startup
-3. **PowerShell install script** — one-time setup fetched from the internet
+1. **stdin** — MCP JSON-RPC messages from the local AI client
+2. **`.env` file** — configuration read from disk at startup
+3. **Install script** — one-time PowerShell download from GitHub
 
 ### Trust Boundaries
 
 ```
-User's machine (fully trusted)
+User's machine (trusted)
 │
-├── Cursor / Claude / VS Code (AI client) ─── same user, same machine
+├── AI client (Cursor / Claude / VS Code) ─── same user, same machine
 │   │
 │   └── AETHER_01 (stdio subprocess) ← THE SERVER
 │       │
-│       └── Windows API (system calls) — same machine, kernel
+│       └── Windows API (system calls) — kernel via Win32 API
 │
-└── Internet ← AETHER_01 does NOT connect here
+└── Internet ← AETHER_01 has ZERO network access
 ```
 
-**AETHER_01 has no network access.** It is a pure stdio process that only communicates with the AI client that spawned it.
+---
+
+## What AETHER_01 Can Do
+
+Full local system access — by design. All 10 tools are documented in [README.md](README.md#features). Capabilities include:
+
+- Read, write, delete files and registry keys
+- Start, stop, kill processes and services
+- Simulate input (mouse, keyboard, clipboard)
+- Capture screenshots
+- Enumerate users, sessions, hardware, network
+- Query Event Logs and WMI
+
+## What AETHER_01 Cannot Do
+
+| Capability | Status | Reason |
+|------------|--------|--------|
+| Network egress | ❌ Impossible | No HTTP, TCP, or UDP code exists |
+| Shell execution | ❌ Impossible | All operations via Win32 API directly |
+| Remote access | ❌ Impossible | stdio-only transport; no listeners |
+| Credential exfiltration | ❌ Impossible | No network path exists |
+| Self-installation | ❌ Impossible | No installer, service, or autorun |
+| Auto-updates | ❌ Impossible | No network request code |
 
 ---
 
-## Capabilities
+## The Real Vulnerability: Human Factor
 
-The server has **full local system access** — by design. It is a Windows system administration tool. Every tool invocation runs with the same privileges as the process that launched it (typically the user's AI client; ideally Administrator).
+**AETHER_01 is a system administration tool.** Like `sudo` on Linux. Like `regedit` on Windows. If you enable every feature gate and bypass every safety check, the server will execute exactly what you tell it — no more, no less.
 
-All 10 tools are documented in [README.md](README.md#features). In summary:
+This is not a code vulnerability. This is the nature of administrative tools.
 
-- Read, write, and delete files
-- Read, write, and delete registry keys
-- Start, stop, and kill processes and services
-- Simulate mouse and keyboard input (GUI automation)
-- Capture screenshots and read the clipboard
-- Enumerate users, sessions, network adapters, and hardware
-- Query Windows Event Logs and WMI
+**Mitigations in your hands:**
 
-### What AETHER_01 CANNOT Do
-
-- **No network egress** — AETHER_01 does not make any outbound HTTP, TCP, or UDP connections. It is a purely local process.
-- **No shell execution** — AETHER_01 never spawns `cmd.exe` or `powershell.exe` for system operations. All operations use direct Win32 API calls via the `windows` crate.
-- **No remote access** — AETHER_01 is stdio-only. No HTTP, no SSE, no WebSocket, no TCP listener.
-- **No credential exfiltration** — AETHER_01 reads credentials from the local machine only. There is no network path to transmit them elsewhere.
-- **No persistence** — AETHER_01 installs nothing. It runs as a child process and exits when the parent closes stdin.
-
----
-
-## The Only Vulnerability: The Human Factor
-
-The primary — and honestly, only — attack vector is **misconfiguration by the administrator**. AETHER_01 provides powerful system access. If you enable every feature gate and bypass every safety check, the server will execute exactly what you (or the AI you are instructing) tell it to.
-
-This is not a vulnerability in the code. This is the **inherent nature of a system administration tool**. `sudo rm -rf /` is not a Linux vulnerability. Deleting `HKEY_LOCAL_MACHINE` is not a Windows vulnerability. These are powerful tools wielded without understanding the consequences.
-
-**The mitigations are in your hands:**
-
-1. **Keep feature gates disabled** — they default to `0` in `.env`
-2. **Require `force: true` for dangerous operations** — the server enforces this
-3. **Enable MCP Tool Protection in Cursor** — require explicit user approval for every tool call
-4. **Never enable gates you do not understand** — read the documentation first
-5. **Test in a VM first** — especially before experimenting with BCD editing or DLL injection
+1. **Keep feature gates disabled** — they default to `0`
+2. **Require `force: true`** — the server enforces this for destructive ops
+3. **Enable MCP Tool Protection** in your AI client — require approval per tool call
+4. **Never enable gates you don't understand**
+5. **Test in a VM first** — especially BCD editing or DLL injection
 
 ---
 
@@ -78,88 +76,68 @@ This is not a vulnerability in the code. This is the **inherent nature of a syst
 
 ### 1. Input Validation
 
-Every parameter is validated before any Win32 API call. Invalid parameters return descriptive errors with translated Win32 error codes via `FormatMessageW`.
+Every parameter is validated before any Win32 API call. Invalid inputs return descriptive errors with translated error codes.
 
 ### 2. Principle of Least Privilege
 
-- Read-only operations (list, query, enumerate) require **no confirmation**
-- Destructive operations (kill, delete, stop, write to system areas) require **`force: true`**
-- Critically dangerous operations (BCD edit, DLL injection, LSA secrets) are **gated behind `.env` feature flags**, all **disabled by default**
+| Risk Level | Operations | Gate |
+|------------|-----------|------|
+| Read-only | List, query, enumerate | None |
+| Destructive | Kill, delete, write, stop | `force: true` |
+| Critical | BCD edit, DLL injection, LSA secrets | Feature gate + `force: true` |
 
 ### 3. No Shell Injection
 
-All system operations use direct Win32 API calls via the `windows` crate. No `cmd.exe`, no `powershell.exe`, no `system()`, no `popen()`. The only exceptions are a small number of external utilities that have no Win32 API equivalent (e.g., `bcdedit`, `wevtutil`, `auditpol`), and even those use hardcoded arguments with validated parameters — no user-controlled shell interpolation.
+All system operations use direct Win32 API (`windows` crate). No `cmd.exe`, no `powershell.exe`, no `system()`, no `popen()`. External utilities (bcdedit, auditpol, wevtutil) are spawned directly via `CreateProcessW` — no shell wrapper, typed parameters only.
 
 ### 4. Binary Hardening
 
-The release binary is compiled with:
-
-- **Control Flow Guard** (`/GUARD:CF`) — runtime indirect-call validation
-- **ASLR** (`/DYNAMICBASE`, `/HIGHENTROPYVA`) — address space randomization
-- **DEP/NX** (`/NXCOMPAT`) — non-executable stack and heap
-- **Fat LTO + codegen-units=1** — maximum dead code elimination
-- **Static CRT** (`+crt-static`) — no external DLL dependencies
-- **Symbol stripping** (`strip=symbols`) — minimal attack surface
-- **Panic=abort** — no unwind tables
+| Protection | Mechanism |
+|-----------|-----------|
+| Control Flow Guard | `/GUARD:CF` — blocks ROP/JOP attacks |
+| ASLR | `/DYNAMICBASE` + `/HIGHENTROPYVA` — random load address |
+| DEP/NX | `/NXCOMPAT` — non-executable stack/heap |
+| Static CRT | `+crt-static` — no external DLL dependency |
+| LTO | `codegen-units=1` — full dead code elimination |
+| Stripping | `strip=symbols` — no function names in binary |
 
 ### 5. Audit Trail
 
-Every tool invocation is logged via `tracing` to stderr:
-
-- Tool name, action, parameters, result, and timestamp
-- Security events (feature gate rejections, force-denied operations) logged at ERROR level
-- All dangerous operations logged with `audit::log_forced`
+Every tool invocation is logged to stderr:
+- Tool name, action, parameters, result, timestamp
+- Security events logged at ERROR level
+- Sensitive data automatically redacted via `redact_sensitive()`
 
 ### 6. Prompt Injection Resistance
 
-AETHER_01 follows the IETF draft [Security Considerations for MCP](https://www.ietf.org/archive/id/draft-mohiuddin-mcp-security-considerations-00.html):
-
-- All tool parameters are treated as **untrusted** — they originate from LLM output, which is susceptible to prompt injection
-- Every parameter is validated before any Win32 API call
-- No parameter can cause shell injection — there is no shell path in the codebase
-- WMI queries are restricted to `SELECT` only — no `DELETE`, `INSERT`, `UPDATE`, or destructive WQL
-- File paths are canonicalized to prevent path traversal
+All tool parameters are treated as **untrusted** (originating from LLM output). Mitigations:
+- Every string parameter validated before Win32 API use
+- No eval-like operations — no code execution through parameters
+- WMI queries restricted to `SELECT` only
+- File paths canonicalized (prevents `..\..\` traversal)
+- No format strings in Win32 API calls
 
 ---
 
 ## Reporting a Vulnerability
 
-**Please do NOT open a public issue.**
+**Do NOT open a public issue.**
 
-Send vulnerability reports to: **security@foursecondfivefour.dev** (or open a private security advisory on GitHub).
+Send reports to: **security@foursecondfivefour.dev**
 
 You can expect:
-
-- Acknowledgment within 48 hours
-- Status update within 7 days
-- Coordinated disclosure with fix availability
+- ✅ Acknowledgment within 48 hours
+- ✅ Status update within 7 days
+- ✅ Coordinated disclosure with fix
 
 ---
 
-## Supply Chain & Dependencies
+## Supply Chain
 
-### Runtime Dependencies
-
-| Crate | Version | Purpose | Audit Status |
-|-------|---------|---------|-------------|
-| `rmcp` | 0.5 | Official MCP Rust SDK | Maintained by Anthropic |
-| `windows` | 0.58 | Microsoft Win32 API bindings | Maintained by Microsoft |
-| `windows-registry` | 0.3 | Registry access | Maintained by Microsoft |
-| `tokio` | 1 | Async runtime | Widely audited |
-| `serde` / `serde_json` | 1 | JSON serialization | Standard Rust ecosystem |
-
-All dependencies are from crates.io with verified checksums. No git dependencies. No unaudited dependencies. No deprecated or unmaintained crates.
-
-### Verifying Dependencies
+All dependencies from crates.io with verified checksums. No git dependencies.
 
 ```bash
 cargo audit          # Vulnerability check
 cargo deny check     # License compliance
 cargo tree           # Full dependency graph
 ```
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE)
