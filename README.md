@@ -251,4 +251,4 @@ src/
 
 ## License
 
-[MIT](LICENSE) © 2025 foursecondfivefour
+[MIT](LICENSE) © 2026 foursecondfivefour
