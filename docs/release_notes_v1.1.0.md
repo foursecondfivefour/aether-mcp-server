@@ -6,6 +6,11 @@
 
 ## What's New
 
+### MCP Protocol Compliance (LobeHub Verified)
+- **Prompts support** — `analyze-system` prompt with optional `level` argument (basic/deep/full)
+- **Resources support** — `system://status` resource returning current system status overview
+- **LobeHub MCP Marketplace** — full verification: ✓ Tools · ✓ Prompts · ✓ Resources
+
 ### Code Quality Foundation
 - **Shared `common.rs` module** — eliminates duplication across security and automation tools
 - **12 source files standardized** — consistent separators, named constants, organized imports
@@ -20,6 +25,7 @@
 - **Compilation fixes** — 3 previously-blocking compilation errors resolved (duplicate functions, duplicate constant, malformed attribute)
 - **Audit trail** — `hosts_file` write operations now pass through audited execution paths
 - **Explicit safety** — all `unsafe` blocks correctly annotated
+- **Windows cross-compilation fixes** — 5 additional compilation errors resolved for mingw target
 
 ---
 

@@ -3,6 +3,8 @@
 use crate::config::FeatureGates;
 use crate::tools;
 
+use std::future::Future;
+
 use rmcp::{
     ErrorData as McpError,
     ServerHandler,
