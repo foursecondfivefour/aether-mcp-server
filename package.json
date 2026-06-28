@@ -1,0 +1,45 @@
+{
+  "name": "@foursecondfivefour/aether-mcp-server",
+  "version": "1.0.1",
+  "description": "AETHER_01 — Full-spectrum Windows MCP server: process, file, registry, service, GUI, system, network, user, security, automation. 10 tools, 99% Windows management coverage.",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "windows",
+    "system-administration",
+    "win32",
+    "model-context-protocol"
+  ],
+  "homepage": "https://github.com/foursecondfivefour/aether-mcp-server",
+  "bugs": "https://github.com/foursecondfivefour/aether-mcp-server/issues",
+  "license": "MIT",
+  "author": "foursecondfivefour",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/foursecondfivefour/aether-mcp-server.git"
+  },
+  "bin": {
+    "aether-mcp-server": "bin/aether-mcp-server.exe"
+  },
+  "files": [
+    "install.js",
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

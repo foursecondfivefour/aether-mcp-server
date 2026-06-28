@@ -2,78 +2,107 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![LobeHub](https://img.shields.io/badge/Available%20on-LobeHub-9cf)](https://lobehub.com/mcp/foursecondfivefour-aether-mcp-server)
+[![npm](https://img.shields.io/npm/v/%40foursecondfivefour%2Faether-mcp-server?color=red)](https://www.npmjs.com/package/@foursecondfivefour/aether-mcp-server)
 
 <p align="center">
   <a href="cursor://anysphere.cursor-deeplink/mcp/install?name=aether-01&config=eyJhcmdzIjpbIi1FeGVjdXRpb25Qb2xpY3kiLCJCeXBhc3MiLCItTm9Qcm9maWxlIiwiLUNvbW1hbmQiLCJpcm0gaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2ZvdXJzZWNvbmRmaXZlZm91ci9hZXRoZXItbWNwLXNlcnZlci9tYWluL2luc3RhbGwucHMxIHwgaWV4Il0sImNvbW1hbmQiOiJwb3dlcnNoZWxsIn0=">
     <img src="https://img.shields.io/badge/Add%20to-Cursor-3ecf8e?logo=cursor&logoColor=white&style=for-the-badge" alt="Add to Cursor" />
   </a>
   <a href="vscode://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D">
-    <img src="https://img.shields.io/badge/Add%20to-VSCode-007acc?logo=visualstudiocode&logoColor=white&style=for-the-badge" alt="Add to VS Code" />
+    <img src="https://img.shields.io/badge/Add%20to-VS%20Code-007acc?logo=visualstudiocode&logoColor=white&style=for-the-badge" alt="Add to VS Code" />
   </a>
   <a href="vscode-insiders://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D">
-    <img src="https://img.shields.io/badge/Add%20to-VSCode%20Insiders-007acc?logo=visualstudio&logoColor=white&style=for-the-badge" alt="Add to VS Code Insiders" />
+    <img src="https://img.shields.io/badge/Add%20to-VS%20Code%20Insiders-007acc?logo=visualstudio&logoColor=white&style=for-the-badge" alt="Add to VS Code Insiders" />
   </a>
 </p>
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1"><img src="https://img.shields.io/badge/PowerShell-Install%20Script-5391FE?logo=powershell&logoColor=white&style=for-the-badge" alt="Install via PowerShell" /></a>
+  <a href="https://www.npmjs.com/package/@foursecondfivefour/aether-mcp-server">
+    <img src="https://img.shields.io/badge/npm%20install-g%20aether--mcp--server-CB3837?logo=npm&style=for-the-badge" alt="npm install" />
+  </a>
+  <a href="https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1">
+    <img src="https://img.shields.io/badge/PowerShell-irm%20%7C%20iex-5391FE?logo=powershell&logoColor=white&style=for-the-badge" alt="Install via PowerShell" />
+  </a>
 </p>
 
-**10 инструментов. 99% охвата Windows. 0 компромиссов в безопасности.**
+**10 tools. 99% Windows coverage. Zero security compromises.**
 
-AETHER_01 — это [MCP (Model Context Protocol)](https://modelcontextprotocol.io) сервер на Rust, предоставляющий AI-ассистентам полный контроль над Windows 10/11 через стандартный ввод/вывод. От управления процессами до GUI-автоматизации, от реестра до WMI-запросов.
+AETHER_01 is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server written in Rust that gives AI assistants full control over Windows 10/11 via standard input/output. From process management to GUI automation, from registry to WMI queries — everything a system administrator needs.
 
 ---
 
-## Возможности
+## Features
 
-| # | Инструмент | Действия |
-|---|-----------|----------|
-| 1 | `process_control` | список, убить, создать, приоритет, потоки, affinity, модули, инъекция DLL* |
-| 2 | `file_system` | чтение/запись/удаление, ACL, симлинки, ADS-потоки, EFS, тома, сетевые шары |
-| 3 | `registry_editor` | чтение/запись/удаление, все кусты, security, мониторинг, офлайн-монтирование* |
-| 4 | `service_manager` | список, старт/стоп/рестарт, конфигурация, триггеры, драйверы |
-| 5 | `gui_automation` | мышь, клавиатура, окна, скриншоты, буфер обмена, дисплей, аудио |
-| 6 | `system_info` | CPU, память, диски, ОС, питание, устройства, BIOS, NTP, ПО, обновления, BCD* |
-| 7 | `network_manager` | адаптеры, соединения, DNS, фаервол, прокси, маршрутизация, WiFi, VPN, Bluetooth |
-| 8 | `user_management` | пользователи, группы, сессии, политики, сертификаты, credentials, токены* |
-| 9 | `security_audit` | аудит, UAC, Defender, AppLocker, BitLocker, TPM, Secure Boot, exploit protection |
-| 10 | `system_automation` | Event Log, Scheduled Tasks, **WMI-запросы** |
+| # | Tool | Actions |
+|---|------|---------|
+| 1 | `process_control` | list, kill, create, priority, threads, affinity, modules, DLL injection* |
+| 2 | `file_system` | read/write/delete, ACL, symlinks, ADS streams, EFS, volumes, network shares |
+| 3 | `registry_editor` | read/write/delete, all hives, security, monitoring, offline mounting* |
+| 4 | `service_manager` | list, start/stop/restart, config, triggers, drivers |
+| 5 | `gui_automation` | mouse, keyboard, windows, screenshots, clipboard, display, audio |
+| 6 | `system_info` | CPU, memory, disk, OS, power, devices, BIOS, NTP, software, updates, BCD* |
+| 7 | `network_manager` | adapters, connections, DNS, firewall, proxy, routing, WiFi, VPN, Bluetooth |
+| 8 | `user_management` | users, groups, sessions, policies, certificates, credentials, tokens* |
+| 9 | `security_audit` | audit, UAC, Defender, AppLocker, BitLocker, TPM, Secure Boot, exploit protection |
+| 10 | `system_automation` | Event Log, Scheduled Tasks, **WMI queries** |
 
-`*` = отключено по умолчанию, включается через `.env` feature gates.
+`*` = disabled by default, enabled via `.env` feature gates.
 
-## Быстрый старт
+---
 
-### Один клик — автоустановка
+## Installation
 
-Скопируйте и вставьте в **PowerShell (администратор)**:
+AETHER_01 provides **5 installation methods** — pick the one that works best for you.
+
+### Method 1: npm global install (easiest)
+
+```powershell
+npm install -g @foursecondfivefour/aether-mcp-server
+```
+
+The postinstall script automatically downloads the latest Windows x64 binary from GitHub Releases and places it in your PATH.
+
+### Method 2: One-click PowerShell install
+
+Run this in **PowerShell 7+ (Administrator)**:
 
 ```powershell
 irm https://raw.githubusercontent.com/foursecondfivefour/aether-mcp-server/main/install.ps1 | iex
 ```
 
-Скрипт автоматически:
-1. Найдёт или скачает последний бинарник AETHER_01
-2. Создаст `.env` с безопасными настройками по умолчанию
-3. Добавит сервер в **все найденные** агентные среды: Cursor, Claude Desktop, Windsurf, VS Code
+The script automatically:
+1. Downloads the latest AETHER_01 binary
+2. Creates `.env` with safe default settings
+3. Registers the server in **all detected** AI environments: Cursor, Claude Desktop, Windsurf, VS Code, and more
 
-### Выборочная установка
+### Method 3: One-click editor integration
+
+Click the badge for your editor:
+
+| Editor | Install |
+|--------|---------|
+| **Cursor** | [![Add to Cursor](https://img.shields.io/badge/Add%20to-Cursor-3ecf8e?logo=cursor&logoColor=white)](cursor://anysphere.cursor-deeplink/mcp/install?name=aether-01&config=eyJhcmdzIjpbIi1FeGVjdXRpb25Qb2xpY3kiLCJCeXBhc3MiLCItTm9Qcm9maWxlIiwiLUNvbW1hbmQiLCJpcm0gaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2ZvdXJzZWNvbmRmaXZlZm91ci9hZXRoZXItbWNwLXNlcnZlci9tYWluL2luc3RhbGwucHMxIHwgaWV4Il0sImNvbW1hbmQiOiJwb3dlcnNoZWxsIn0=) |
+| **VS Code** | [![Add to VS Code](https://img.shields.io/badge/Add%20to-VS%20Code-007acc?logo=visualstudiocode&logoColor=white)](vscode://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D) |
+| **VS Code Insiders** | [![Add to VS Code Insiders](https://img.shields.io/badge/Add%20to-VS%20Code%20Insiders-007acc?logo=visualstudio&logoColor=white)](vscode-insiders://mcp/install?%7B%22args%22%3A%5B%22-ExecutionPolicy%22%2C%22Bypass%22%2C%22-NoProfile%22%2C%22-Command%22%2C%22irm+https%3A%2F%2Fraw.githubusercontent.com%2Ffoursecondfivefour%2Faether-mcp-server%2Fmain%2Finstall.ps1+%7C+iex%22%5D%2C%22command%22%3A%22powershell%22%7D) |
+
+### Method 4: Selective install with install.ps1
 
 ```powershell
-# Только Cursor
+# Cursor only
 .\install.ps1 -Targets cursor
 
 # Claude Desktop + Windsurf
 .\install.ps1 -Targets claude,windsurf
 
-# С указанием пути к своему бинарнику
+# Custom binary path
 .\install.ps1 -BinaryPath target\release\aether-mcp-server.exe
 
-# Скачать конкретный релиз
-.\install.ps1 -ReleaseTag v1.0.0
+# Specific release version
+.\install.ps1 -ReleaseTag v1.0.1
 ```
 
-### Сборка из исходников
+### Method 5: Build from source
 
 ```powershell
 git clone https://github.com/foursecondfivefour/aether-mcp-server
@@ -83,9 +112,7 @@ cargo build --release
 .\install.ps1 -BinaryPath target\release\aether-mcp-server.exe
 ```
 
-### Ручная настройка (без скрипта)
-
-Добавьте в конфигурационный файл вашей агентной среды:
+### Manual configuration (without install script)
 
 <details>
 <summary><b>Cursor</b> — <code>%USERPROFILE%\.cursor\mcp.json</code></summary>
@@ -147,130 +174,138 @@ cargo build --release
 ```
 </details>
 
-> **После настройки** перезапустите приложение. В интерфейсе MCP появится 10 инструментов AETHER_01.
+> **After configuring**, restart your editor. The MCP panel will show 10 AETHER_01 tools.
+
+---
 
 ## Feature Gates (.env)
 
-Опасные операции отключены по умолчанию и включаются администратором:
+Dangerous operations are **disabled by default** and enabled by the system administrator:
 
 ```env
-AETHER_BCD_EDIT=0          # Изменение конфигурации загрузки Windows
-AETHER_HAL_CONFIG=0        # Настройка HAL и дампа памяти
-AETHER_OFFLINE_REGISTRY=0  # Монтирование офлайн-кустов реестра
-AETHER_DLL_INJECT=0        # Инъекция DLL в процессы
-AETHER_TOKEN_MANIPULATION=0 # Манипуляция токенами доступа
-AETHER_LSA_SECRETS=0       # Чтение LSA-секретов
+AETHER_BCD_EDIT=0          # Windows boot configuration editing
+AETHER_HAL_CONFIG=0        # HAL and memory dump configuration
+AETHER_OFFLINE_REGISTRY=0  # Offline registry hive mounting
+AETHER_DLL_INJECT=0        # DLL injection into processes
+AETHER_TOKEN_MANIPULATION=0 # Access token manipulation
+AETHER_LSA_SECRETS=0       # LSA secret reading
 ```
 
-## Безопасность
+---
 
-> **Единственная уязвимость — человеческий фактор.**
-> AETHER_01 — это инструмент системного администратора. Как `sudo`, как `regedit`, как `services.msc`.
-> Если включить все feature gates, отключить проверки `force` и слепо выполнять команды AI —
-> сервер сделает ровно то, что вы ему сказали. Это не баг. Это природа административного инструмента.
-> Подробный анализ угроз: [SECURITY.md](SECURITY.md)
+## Security
 
-### Модель угроз
+> **The only vulnerability is human error.**
+> AETHER_01 is a system administrator tool — like `sudo`, `regedit`, or `services.msc`.
+> If you enable all feature gates, disable `force` checks, and blindly execute AI commands —
+> the server does exactly what you tell it. That's not a bug. That's the nature of an administrative tool.
+> Full threat analysis: [SECURITY.md](SECURITY.md)
+
+### Threat Model
 
 ```
-Ваш компьютер (доверенная среда)
+Your computer (trusted environment)
 │
-├── Cursor / Claude / VS Code (AI-клиент) ─── тот же пользователь, та же машина
+├── Cursor / Claude / VS Code (AI client) ─── same user, same machine
 │   │
-│   └── AETHER_01 (stdio subprocess) ← СЕРВЕР
+│   └── AETHER_01 (stdio subprocess) ← SERVER
 │       │
-│       └── Windows API (системные вызовы) — та же машина, ядро
+│       └── Windows API (system calls) — same machine, kernel
 │
-└── Интернет ← AETHER_01 НЕ подключается к сети
+└── Internet ← AETHER_01 has NO network access
 ```
 
-**AETHER_01 не имеет доступа к сети.** Это чистый stdio-процесс. Он не делает HTTP-запросов, не открывает портов, не слушает соединения. Вся коммуникация — через stdin/stdout с локальным AI-клиентом.
+**AETHER_01 has no network access.** It is a pure stdio process. It does not make HTTP requests, open ports, or listen for connections. All communication is through stdin/stdout with the local AI client.
 
-### Что сервер НЕ делает (и не может)
+### What the server CANNOT do
 
-| Возможность | Статус | Почему |
-|-------------|--------|--------|
-| Сетевые соединения | Невозможно | Нет кода для HTTP/TCP/UDP |
-| Выполнение shell-команд | Невозможно | Только прямые Win32 API, без `cmd.exe` |
-| Удалённый доступ | Невозможно | Только stdio, без HTTP/SSE/TCP |
-| Кража данных через сеть | Невозможно | Физически нет сетевого пути |
-| Самозапуск / persistence | Невозможно | Нет установщика, нет сервиса, нет автозапуска |
-| Автообновление | Невозможно | Нет кода для сетевых запросов |
+| Capability | Status | Reason |
+|------------|--------|--------|
+| Network connections | Impossible | No HTTP/TCP/UDP code |
+| Shell execution | Impossible | Direct Win32 API only, no `cmd.exe` |
+| Remote access | Impossible | stdio only, no HTTP/SSE/TCP |
+| Data exfiltration | Impossible | No network path at all |
+| Auto-start / persistence | Impossible | No installer, no service, no autorun |
+| Auto-update | Impossible | No network request code |
 
-### Что защищает от злоупотребления
+### Defense mechanisms
 
-| Механизм | Уровень защиты | Описание |
-|----------|---------------|----------|
-| **Feature Gates** | Максимальный | BCD Edit, DLL Injection, LSA Secrets, Token Manipulation, Offline Registry, HAL Config — **отключены по умолчанию** в `.env`. Без явного включения администратором эти операции недоступны. |
-| **`force: true`** | Высокий | Каждая опасная операция требует явного подтверждения в параметрах. Без `"force": true` сервер отказывает. |
-| **Валидация ввода** | Высокий | Каждый параметр проверяется до вызова Win32 API. Неверные типы, пустые строки, невалидные PID — мгновенный отказ. |
-| **Отсутствие shell-инъекций** | Высокий | Никаких вызовов `cmd.exe` / `powershell.exe`. Все операции через прямые Win32 API. Нет пути для инъекции команд. |
-| **WMI только SELECT** | Средний | WMI-запросы ограничены SELECT. DELETE/INSERT/UPDATE — отклоняются. Таймаут 30 сек, лимит 1000 строк. |
-| **Каноникализация путей** | Средний | Все файловые пути проходят через `canonicalize` для предотвращения path traversal. |
-| **Аудит всех действий** | Средний | Каждый вызов инструмента логируется в stderr: инструмент, действие, параметры, результат. |
+| Mechanism | Protection Level | Description |
+|-----------|-----------------|-------------|
+| **Feature Gates** | Maximum | BCD Edit, DLL Injection, LSA Secrets, Token Manipulation, Offline Registry, HAL Config — **disabled by default** in `.env`. Operations are unavailable without explicit admin enablement. |
+| **`force: true`** | High | Every dangerous operation requires explicit confirmation in parameters. Without `"force": true` the server refuses. |
+| **Input validation** | High | Every parameter is validated before Win32 API calls. Invalid types, empty strings, invalid PIDs — immediate rejection. |
+| **No shell injection** | High | Zero `cmd.exe` / `powershell.exe` calls. All operations through direct Win32 API. No command injection path. |
+| **WMI SELECT only** | Medium | WMI queries restricted to SELECT. DELETE/INSERT/UPDATE — rejected. 30s timeout, 1000 row limit. |
+| **Path canonicalization** | Medium | All file paths go through `canonicalize` to prevent path traversal. |
+| **Full audit logging** | Medium | Every tool call logged to stderr: tool, action, parameters, result. |
 
-### Компиляторная защита бинарника
+### Binary hardening
 
-| Технология | Эффект |
+| Technology | Effect |
 |-----------|--------|
-| **Control Flow Guard** (`/GUARD:CF`) | Проверка каждого косвенного вызова — блокирует ROP/JOP-атаки |
-| **ASLR** (`/DYNAMICBASE` + `/HIGHENTROPYVA`) | Случайный адрес загрузки — невозможность предсказать расположение кода |
-| **DEP/NX** (`/NXCOMPAT`) | Стек и куча неисполняемы — невозможность shellcode-инъекций |
-| **Статический CRT** (`+crt-static`) | Нет зависимости от внешних DLL — невозможно подменить библиотеку |
-| **Fat LTO** + `codegen-units=1` | Полное удаление мёртвого кода — меньше поверхность атаки |
-| **Symbol stripping** (`strip=symbols`) | Нет имён функций в бинарнике — дороже реверс-инжиниринг |
-| **Panic=abort** | Нет unwind-таблиц — меньше бинарник, нет утечки стека |
+| **Control Flow Guard** (`/GUARD:CF`) | Checks every indirect call — blocks ROP/JOP attacks |
+| **ASLR** (`/DYNAMICBASE` + `/HIGHENTROPYVA`) | Random load address — can't predict code location |
+| **DEP/NX** (`/NXCOMPAT`) | Stack and heap non-executable — no shellcode injection |
+| **Static CRT** (`+crt-static`) | No external DLL dependency — can't swap the library |
+| **Fat LTO** + `codegen-units=1` | Full dead code removal — smaller attack surface |
+| **Symbol stripping** | No function names in binary — harder reverse engineering |
+| **Panic=abort** | No unwind tables — smaller binary, no stack leaks |
 
-### Соответствие стандартам
+### Standards compliance
 
-AETHER_01 следует рекомендациям:
+AETHER_01 follows:
 
-- **[IETF draft: MCP Security Considerations](https://www.ietf.org/archive/id/draft-mohiuddin-mcp-security-considerations-00.html)** — все параметры инструментов считаются недоверенными (происходят от LLM, подверженного prompt injection)
-- **[OWASP LLM Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/)** — LLM06 (Excessive Agency) митигирован через `force: true` + feature gates; LLM02 (Insecure Output Handling) митигирован через валидацию параметров
-- **[Anthropic MCP Security Best Practices](https://modelcontextprotocol.io/docs/concepts/security)** — stdio транспорт (изолированный), least privilege через gates, audit logging
+- **[IETF draft: MCP Security Considerations](https://www.ietf.org/archive/id/draft-mohiuddin-mcp-security-considerations-00.html)** — all tool parameters treated as untrusted (originate from LLM susceptible to prompt injection)
+- **[OWASP LLM Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/)** — LLM06 (Excessive Agency) mitigated via `force: true` + feature gates; LLM02 (Insecure Output Handling) mitigated via parameter validation
+- **[Anthropic MCP Security Best Practices](https://modelcontextprotocol.io/docs/concepts/security)** — stdio transport (isolated), least privilege via gates, audit logging
 
-### Prompt Injection Resistance
+### Prompt injection resistance
 
-Параметры инструментов AETHER_01 поступают от LLM, который подвержен prompt injection. Поэтому:
-- **Каждый строковый параметр экранируется** перед использованием в Win32 API
-- **Нет eval-подобных операций** — нельзя «выполнить произвольный код» через параметр
-- **Нет форматных строк** в Win32 API — параметры никогда не интерпретируются как код
-- **WMI WQL экранируется** — одинарные кавычки в строках запроса преобразуются
-- **Пути каноникализируются** — `..\..\windows\system32` нормализуется до проверяемого пути
+AETHER_01 tool parameters come from an LLM that is susceptible to prompt injection. Therefore:
+- **Every string parameter is escaped** before use in Win32 API
+- **No eval-like operations** — cannot "execute arbitrary code" through a parameter
+- **No format strings** in Win32 API — parameters are never interpreted as code
+- **WMI WQL is escaped** — single quotes in query strings are transformed
+- **Paths are canonicalized** — `..\..\windows\system32` is normalized to a checkable path
 
-### Известные CVE и их неприменимость
+### Known CVEs and inapplicability
 
-| CVE | Применим к AETHER? | Почему нет |
-|-----|-------------------|------------|
-| CVE-2025-54136 (MCPoison) | Нет | AETHER — нативный .exe, не через `npx`/npm. MCP-конфиг не содержит исполняемого кода — только путь к бинарнику. |
-| CVE-2025-54135 (CurXecute) | Нет | AETHER не обрабатывает MCP-конфиги из репозиториев. Конфиг пишется один раз через `install.ps1`. |
-| CVE-2025-64106 (TrustFall) | Нет | AETHER не загружает workspace-level конфиги. |
-| Command Injection | Нет | AETHER не использует shell. Все Win32 API вызовы с типизированными параметрами. |
+| CVE | Applicable to AETHER? | Why not |
+|-----|----------------------|---------|
+| CVE-2025-54136 (MCPoison) | No | AETHER is a native .exe, not via `npx`/npm. MCP config contains no executable code — only a binary path. |
+| CVE-2025-54135 (CurXecute) | No | AETHER does not process MCP configs from repositories. Config is written once via `install.ps1`. |
+| CVE-2025-64106 (TrustFall) | No | AETHER does not load workspace-level configs. |
+| Command Injection | No | AETHER does not use shell. All Win32 API calls with typed parameters. |
 
-> **Bottom line**: если вы не включаете feature gates без понимания, если вы не отключаете `force`-проверки, если вы не запускаете бинарник из недоверенного источника — AETHER_01 безопасен. Это как держать `sudo` на Linux: мощный инструмент, требующий осознанного использования.
+> **Bottom line**: if you don't enable feature gates without understanding them, don't disable `force` checks, and don't run the binary from an untrusted source — AETHER_01 is safe. Like `sudo` on Linux: a powerful tool requiring conscious use.
 
-### Сообщить об уязвимости
+### Report a vulnerability
 
-[SECURITY.md](SECURITY.md) — процесс раскрытия, поддерживаемые версии, supply chain audit.
+[SECURITY.md](SECURITY.md) — disclosure process, supported versions, supply chain audit.
 
-## Производительность
+---
 
-- `opt-level = 3` (все оптимизации LLVM)
-- `lto = true` (fat LTO через все крейты)
-- `codegen-units = 1` (полное удаление мёртвого кода)
-- `panic = "abort"` (нет unwind-таблиц)
-- `strip = "symbols"` (минимальный бинарник)
+## Performance
+
+- `opt-level = 3` (all LLVM optimizations)
+- `lto = true` (fat LTO across all crates)
+- `codegen-units = 1` (full dead code elimination)
+- `panic = "abort"` (no unwind tables)
+- `strip = "symbols"` (minimal binary)
 - `target-cpu = native` (AVX2, BMI2, FMA, POPCNT)
 
-## Структура проекта
+---
+
+## Project Structure
 
 ```
 src/
-├── main.rs              # tokio::main, stdio транспорт
+├── main.rs              # tokio::main, stdio transport
 ├── server.rs            # AetherServer + tool_router
-├── config.rs            # FeatureGates из .env
-├── error.rs             # AetherError + FormatMessageW (русские сообщения)
-├── audit.rs             # Структурированный аудит
+├── config.rs            # FeatureGates from .env
+├── error.rs             # AetherError + FormatMessageW
+├── audit.rs             # Structured audit logging
 └── tools/
     ├── process.rs       # process_control
     ├── filesystem.rs    # file_system
@@ -284,6 +319,8 @@ src/
     └── automation.rs    # system_automation
 ```
 
-## Лицензия
+---
+
+## License
 
 MIT

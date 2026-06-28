@@ -1,0 +1,50 @@
+{
+  "identifier": "foursecondfivefour-aether-mcp-server",
+  "name": "AETHER_01",
+  "version": "1.0.1",
+  "description": "Full-spectrum Windows MCP server — process, file, registry, service, GUI, system, network, user, security, automation",
+  "author": "foursecondfivefour",
+  "authorUrl": "https://github.com/foursecondfivefour",
+  "homepage": "https://github.com/foursecondfivefour/aether-mcp-server",
+  "icon": "⚡",
+  "category": "development",
+  "tags": ["windows", "system-administration", "mcp-server", "win32-api", "rust"],
+  "tools": [
+    { "name": "process_control", "description": "Manage Windows processes — list, kill, create, set priority, threads, CPU affinity, loaded modules, DLL injection" },
+    { "name": "file_system", "description": "Windows file operations — read/write/delete, ACL management, symbolic links, alternate data streams, EFS, volumes, network shares" },
+    { "name": "registry_editor", "description": "Windows Registry access — read/write/delete, hive enumeration, security descriptors, change monitoring, offline hive mounting" },
+    { "name": "service_manager", "description": "Windows Service management — list, start/stop/restart, configuration change, triggers, kernel driver control" },
+    { "name": "gui_automation", "description": "Windows GUI automation — mouse control, keyboard input, window management, screenshots, clipboard, display config, audio control" },
+    { "name": "system_info", "description": "Windows system information — CPU, memory, disk, OS version, power/battery, devices, BIOS, NTP, installed software, Windows updates, BCD" },
+    { "name": "network_manager", "description": "Windows network management — adapters, connections, DNS config, firewall rules, proxy settings, routing table, WiFi networks, VPN, Bluetooth" },
+    { "name": "user_management", "description": "Windows user administration — users, groups, sessions, security policies, certificates, credential manager, access token manipulation" },
+    { "name": "security_audit", "description": "Windows security auditing — audit policy, UAC config, Defender status, AppLocker rules, BitLocker, TPM, Secure Boot, exploit protection" },
+    { "name": "system_automation", "description": "Windows automation — Event Log query/subscribe, Scheduled Tasks create/delete/run, safe WMI SELECT queries" }
+  ],
+  "prompts": [
+    { "name": "system_status", "description": "Analyze CPU, memory, disk, and OS health with optional service and process details" },
+    { "name": "diagnostic_report", "description": "Generate a structured troubleshooting report with recent event logs and optional Defender status" },
+    { "name": "security_posture", "description": "Assess Windows security posture — UAC, Defender, BitLocker, TPM, with optional AppLocker policy analysis" }
+  ],
+  "resources": [
+    { "name": "cpu_info", "description": "Live CPU metrics — usage, temperature, load", "uri": "aether://system/cpu" },
+    { "name": "memory_info", "description": "Live memory metrics — total, used, available, page file", "uri": "aether://system/memory" },
+    { "name": "os_info", "description": "OS version, build, edition, install date", "uri": "aether://system/os" },
+    { "name": "disk_info", "description": "Disk usage — capacity, free space, health", "uri": "aether://system/disk" },
+    { "name": "uptime_info", "description": "System uptime and boot time", "uri": "aether://system/uptime" },
+    { "name": "battery_info", "description": "Battery status — charge level, health, cycle count", "uri": "aether://system/battery" },
+    { "name": "bios_info", "description": "BIOS version, vendor, release date", "uri": "aether://system/bios" },
+    { "name": "installed_software", "description": "List of installed software from Registry", "uri": "aether://system/installed-software" },
+    { "name": "environment", "description": "System environment variables", "uri": "aether://system/environment" },
+    { "name": "power_plans", "description": "Windows power plan configuration", "uri": "aether://system/power-plans" },
+    { "name": "devices", "description": "Connected hardware devices", "uri": "aether://system/devices" },
+    { "name": "drivers", "description": "Installed kernel drivers", "uri": "aether://system/drivers" },
+    { "name": "current_user", "description": "Current user account info", "uri": "aether://system/current-user" },
+    { "name": "services", "description": "Windows services list with status", "uri": "aether://system/services" },
+    { "name": "network_adapters", "description": "Network adapter configuration and status", "uri": "aether://system/network-adapters" },
+    { "name": "security_status", "description": "Windows security center status overview", "uri": "aether://system/security-status" },
+    { "name": "scheduled_tasks", "description": "Scheduled tasks list", "uri": "aether://system/scheduled-tasks" },
+    { "name": "event_channels", "description": "Available Windows Event Log channels", "uri": "aether://system/event-channels" },
+    { "name": "feature_gates", "description": "Current feature gate configuration", "uri": "aether://config/feature-gates" }
+  ]
+}
