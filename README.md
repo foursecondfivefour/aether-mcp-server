@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![LobeHub](https://img.shields.io/badge/Available%20on-LobeHub-9cf)](https://lobehub.com/mcp/foursecondfivefour-aether-mcp-server)
+[![MCP Badge](https://lobehub.com/badge/mcp-full/foursecondfivefour-aether-mcp-server?theme=light)](https://lobehub.com/mcp/foursecondfivefour-aether-mcp-server)
 [![npm](https://img.shields.io/npm/v/%40foursecondfivefour%2Faether-mcp-server?color=red)](https://www.npmjs.com/package/@foursecondfivefour/aether-mcp-server)
 
 <p align="center">
